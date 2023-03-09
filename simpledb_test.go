@@ -1,6 +1,8 @@
 package simpledb
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestNew(t *testing.T) {
 	d, err := New[Person]("testdb")
@@ -48,9 +50,9 @@ func TestNewCloseOpen(t *testing.T) {
 	}
 	d, err := db2.Get(id2)
 	if err != nil {
-		t.Error("error getting item ", id2)
+		t.Error("error getting item ", id2, err)
 	}
-	if d.Age != testData[1].Age {
+	if d.Data.Age != testData[1].Age {
 		t.Error("Wrong data")
 	}
 }

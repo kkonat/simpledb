@@ -117,9 +117,10 @@ func (db *SimpleDb[T]) Append(itemData T) (id DbItemID, err error) {
 	if len(data) > 65535 {
 		panic("data size max. 65535")
 	}
-	var extdata []byte = []byte{}
-	binary.LittleEndian.AppendUint16(extdata, uint16(len(data)))
+	var extdata []byte = make([]byte, 0)
+	extdata = binary.LittleEndian.AppendUint16(extdata, uint16(len(data)))
 	extdata = append(extdata, data...) // combine this int16  with data
+
 	// write everything at once (pretending to be atomic)
 	if bytesWritten, err = db.dataFile.Write(extdata); err != nil {
 		return 0, err
@@ -131,11 +132,11 @@ func (db *SimpleDb[T]) Append(itemData T) (id DbItemID, err error) {
 	return
 }
 
-func (db *SimpleDb[T]) Get(id DbItemID) (readData T, err error) {
+func (db *SimpleDb[T]) Get(id DbItemID) (rd *DbItem[T], err error) {
 	seek, ok := db.Offsets[id]
 
 	if !ok {
-		return readData, errors.New("item not found")
+		return nil, errors.New("item not found")
 	}
 
 	log.Debug("seek:", seek)
@@ -153,7 +154,7 @@ func (db *SimpleDb[T]) Get(id DbItemID) (readData T, err error) {
 
 	itemLen := binary.LittleEndian.Uint16(l)
 
-	log.Debug("itemLen:", itemLen)
+	log.Debug("itemLen:", itemLen, ":", l[0], l[1])
 
 	var data []byte = make([]byte, itemLen)
 	n, err = db.dataFile.Read(data)
@@ -162,8 +163,15 @@ func (db *SimpleDb[T]) Get(id DbItemID) (readData T, err error) {
 	}
 
 	log.Debug("bytes read:", n)
+	log.Debug(string(data[:]))
 
-	err = json.Unmarshal(data, readData)
+	readData := new(DbItem[T])
+	err = unmarshalAny(data, readData)
+	log.Debug("json:", readData)
+	if err != nil {
+		log.Debug("error unmarshaling", err)
+		return
+	}
 	return readData, err
 }
 
@@ -178,6 +186,13 @@ func (db *SimpleDb[T]) Close() (err error) {
 	}
 	err = os.WriteFile(db.infoFilePath, data, 0644)
 	return
+}
+
+func unmarshalAny[T any](bytes []byte, out *T) error {
+	if err := json.Unmarshal(bytes, out); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (db *SimpleDb[T]) Flush() error {
