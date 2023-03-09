@@ -1,50 +1,194 @@
 package simpledb
 
 import (
+	"encoding/binary"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	log "github.com/sirupsen/logrus"
 )
 
 const (
-	dbFileExt  = ".sdb"
-	idxFileExt = ".idx"
+	dbPath = "./db"
+	dbExt  = ".json"
 )
 
 func init() {
 	log.SetLevel(log.DebugLevel)
 }
 
-// Index holds offsets to individual data entries in the database file
-type Index map[int64]int64
+type DbItemID int32
 
-type SimpleDb struct {
-	dataFile string
-	index    Index
+// type Hashmap map[int64][]DbItemID
+type OffsetsData map[DbItemID]int64
+type SimpleDb[T any] struct {
+	infoFilePath string `json:"-"`
+
+	dataFilePath string   `json:"-"`
+	dataFile     *os.File `json:"-"`
+
+	ItemCounter DbItemID
+	CurrOffset  int64
+	Offsets     OffsetsData
+
+	// hashes  Hashmap
 }
-type DbItem struct {
-	id       int64
-	data     []byte
-	lastUsed time.Time
+type DbItem[T any] struct {
+	Id       DbItemID
+	Data     T
+	LastUsed int64
+	delete   bool
+	// hash 		 int64
 }
 
-func New(filename string) (*SimpleDb, error) {
+func init() {
+}
 
-	fname := filepath.Clean(filename)
-	if _, err := os.Stat(fname); err == nil {
-		log.Debug("Using '%s' (database already exists)\n", dir)
+func New[T any](filename string) (db *SimpleDb[T], err error) {
 
+	dbDataFile := filepath.Clean(filename)
+	dir, file := filepath.Split(dbDataFile)
+	infoFilePath := filepath.Join(dbPath, dir, "info-"+file+dbExt)
+	dataFilePath := filepath.Join(dbPath, dir, "data-"+file+dbExt)
+
+	if _, err = os.Stat(dbPath); err != nil {
+		os.Mkdir(dbPath, 0700)
 	}
+	if _, err = os.Stat(infoFilePath); err == nil {
+		log.Info(infoFilePath + " database already exists\nReading in\n")
+		db, err = readDbInfo[T](infoFilePath) // read existing database
+	} else {
+		db = &SimpleDb[T]{} // create new database
+		db.Offsets = make(OffsetsData)
+	}
+	db.dataFile, err = openDbFile(dataFilePath) // open data file for reading and writing
+	db.infoFilePath = infoFilePath
+	db.dataFilePath = dataFilePath
+	return
 }
 
-func Write(data any) (id int64, err error) {
-
+func readDbInfo[T any](file string) (db *SimpleDb[T], err error) {
+	var data []byte
+	data, err = os.ReadFile(file)
+	if err != nil {
+		return
+	}
+	db = &SimpleDb[T]{}
+	err = json.Unmarshal(data, db)
+	return
 }
 
-func Get(id int64) (any, error) {
-
+func (db *SimpleDb[T]) getNewId() (id DbItemID) {
+	id = db.ItemCounter
+	db.ItemCounter++
+	return
 }
 
-func purgeOld() error {}
+func (db *SimpleDb[T]) Append(itemData T) (id DbItemID, err error) {
+	var (
+		mtx          sync.Mutex
+		data         []byte
+		bytesWritten int
+	)
+
+	mtx.Lock()
+	defer mtx.Unlock()
+
+	id = db.getNewId()
+
+	item := DbItem[T]{
+		Id:       db.ItemCounter,
+		LastUsed: time.Now().Unix(),
+		Data:     itemData,
+	}
+
+	data, err = json.Marshal(item)
+	if err != nil {
+		return
+	}
+
+	// write next data chunk
+	bytesWritten = 0
+
+	if len(data) > 65535 {
+		panic("data size max. 65535")
+	}
+	var extdata []byte = []byte{}
+	binary.LittleEndian.AppendUint16(extdata, uint16(len(data)))
+	extdata = append(extdata, data...) // combine this int16  with data
+	// write everything at once (pretending to be atomic)
+	if bytesWritten, err = db.dataFile.Write(extdata); err != nil {
+		return 0, err
+	}
+
+	db.Offsets[id] = db.CurrOffset
+	db.CurrOffset += int64(bytesWritten)
+
+	return
+}
+
+func (db *SimpleDb[T]) Get(id DbItemID) (readData T, err error) {
+	seek, ok := db.Offsets[id]
+
+	if !ok {
+		return readData, errors.New("item not found")
+	}
+
+	log.Debug("seek:", seek)
+
+	db.dataFile.Seek(seek, 0)
+
+	var l []byte = []byte{0, 0} // two bytes
+	var n int
+	n, err = db.dataFile.Read(l)
+	if err != nil {
+		return
+	}
+
+	log.Debug("bytes read:", n)
+
+	itemLen := binary.LittleEndian.Uint16(l)
+
+	log.Debug("itemLen:", itemLen)
+
+	var data []byte = make([]byte, itemLen)
+	n, err = db.dataFile.Read(data)
+	if err != nil {
+		return
+	}
+
+	log.Debug("bytes read:", n)
+
+	err = json.Unmarshal(data, readData)
+	return readData, err
+}
+
+func (db *SimpleDb[T]) Close() (err error) {
+	var data []byte
+
+	db.dataFile.Close()
+
+	data, err = json.Marshal(db)
+	if err != nil {
+		return
+	}
+	err = os.WriteFile(db.infoFilePath, data, 0644)
+	return
+}
+
+func (db *SimpleDb[T]) Flush() error {
+	var err error
+	db.dataFile.Close()
+	db.dataFile, err = openDbFile(db.dataFilePath) // reopen
+	return err
+}
+
+// Helper functions
+func openDbFile(path string) (file *os.File, err error) {
+	file, err = os.OpenFile(path, os.O_APPEND|os.O_RDWR|os.O_CREATE, 0600)
+	return
+}
