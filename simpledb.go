@@ -183,7 +183,7 @@ func (db *SimpleDb[T]) Get(id DbItemID) (rd *T, err error) {
 	}
 
 	newData := new(DbItem[T])
-	if err = unmarshalAny(data, newData); err != nil {
+	if err := json.Unmarshal(data, newData); err != nil {
 		return nil, fmt.Errorf("error unmarshalling: %w", err)
 	}
 	db.addToMemCache(newData)
@@ -193,16 +193,6 @@ func (db *SimpleDb[T]) Get(id DbItemID) (rd *T, err error) {
 func (db *SimpleDb[T]) Close() (err error) {
 
 	return db.dataFile.Close()
-}
-
-func readDbInfo[T any](file string) (db *SimpleDb[T], err error) {
-	var data []byte
-	if data, err = os.ReadFile(file); err != nil {
-		return nil, fmt.Errorf("error reading dBfile: %w", err)
-	}
-	db = &SimpleDb[T]{}
-	err = json.Unmarshal(data, db)
-	return
 }
 
 func (db *SimpleDb[T]) addToMemCache(item *DbItem[T]) {
@@ -265,13 +255,6 @@ loop:
 	}
 	db.currOffset = curpos
 	db.itemCounter = DbItemID(count)
-	return nil
-}
-
-func unmarshalAny[T any](bytes []byte, out *T) error {
-	if err := json.Unmarshal(bytes, out); err != nil {
-		return err
-	}
 	return nil
 }
 

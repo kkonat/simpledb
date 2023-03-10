@@ -153,10 +153,6 @@ func TestCache(t *testing.T) {
 	}
 	log.Info("Cache Hit rate: ", db.hitRate(), " %")
 }
-func TestBuildoffsets(t *testing.T) {
-	db, _ := Connect[benchmarkData]("benchmark")
-	db.Close()
-}
 func BenchmarkCache(b *testing.B) {
 	var (
 		d   *benchmarkData
