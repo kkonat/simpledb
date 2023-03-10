@@ -17,7 +17,7 @@ import (
 
 const (
 	dbPath           = "./db"
-	dbExt            = ".json"
+	dbExt            = ".sdb"
 	MemCacheMaxItems = 100
 )
 
@@ -68,19 +68,13 @@ func Connect[T any](filename string) (db *SimpleDb[T], err error) {
 
 	dbDataFile := filepath.Clean(filename)
 	dir, file := filepath.Split(dbDataFile)
-	infoFilePath := filepath.Join(dbPath, dir, "info-"+file+dbExt)
-	dataFilePath := filepath.Join(dbPath, dir, "data-"+file+dbExt)
+	dataFilePath := filepath.Join(dbPath, dir, file+dbExt)
 
 	if _, err = os.Stat(dbPath); err != nil {
 		os.Mkdir(dbPath, 0700)
 	}
-
-	if _, err = os.Stat(infoFilePath); err == nil {
-
-		db, err = readDbInfo[T](infoFilePath) // read existing database
-		if err != nil {
-			return
-		}
+	db = &SimpleDb[T]{} // create new database
+	if _, err = os.Stat(dataFilePath); err == nil {
 		db.dataFile, err = openDbFile(dataFilePath)
 		if err != nil {
 			return
@@ -90,7 +84,7 @@ func Connect[T any](filename string) (db *SimpleDb[T], err error) {
 			return
 		}
 	} else {
-		db = &SimpleDb[T]{} // create new database
+
 		db.offsets = make(OffsetsData)
 		db.dataFile, err = openDbFile(dataFilePath)
 	}
@@ -109,7 +103,7 @@ func Connect[T any](filename string) (db *SimpleDb[T], err error) {
 func (db *SimpleDb[T]) Kill(dbName string) (err error) {
 	_, file := filepath.Split(db.dataFilePath)
 	name := strings.Split(file, ".")[0]
-	if "data-"+dbName != name {
+	if dbName != name {
 		return errors.New("security check failed: invalid db name provided")
 	}
 	db.dataFile.Close()
