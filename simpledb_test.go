@@ -66,10 +66,10 @@ func TestNewCloseOpen(t *testing.T) {
 	if err != nil {
 		t.Errorf("failed to open database: %v", err)
 	}
-	if db1.CurrOffset != db2.CurrOffset {
+	if db1.currOffset != db2.currOffset {
 		t.Error("different offsets")
 	}
-	if db1.ItemCounter != db2.ItemCounter {
+	if db1.itemCounter != db2.itemCounter {
 		t.Error("differenc counters")
 	}
 	pers, err := db2.Get(id2)
@@ -153,7 +153,10 @@ func TestCache(t *testing.T) {
 	}
 	log.Info("Cache Hit rate: ", db.hitRate(), " %")
 }
-
+func TestBuildoffsets(t *testing.T) {
+	db, _ := Connect[benchmarkData]("benchmark")
+	db.Close()
+}
 func BenchmarkCache(b *testing.B) {
 	var (
 		d   *benchmarkData

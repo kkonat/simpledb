@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -45,14 +46,13 @@ func (m Cache[T]) hitRate() float64 {
 }
 
 type SimpleDb[T any] struct {
-	infoFilePath string   `json:"-"`
-	dataFilePath string   `json:"-"`
-	dataFile     *os.File `json:"-"`
+	dataFilePath string
+	dataFile     *os.File
 
 	Cache[T]
-	ItemCounter DbItemID
-	CurrOffset  int64
-	Offsets     OffsetsData
+	itemCounter DbItemID
+	currOffset  int64
+	offsets     OffsetsData
 
 	// hashes  Hashmap
 }
@@ -62,9 +62,6 @@ type DbItem[T any] struct {
 	LastUsed int64
 	delete   bool
 	// hash 		 int64
-}
-
-func init() {
 }
 
 func Connect[T any](filename string) (db *SimpleDb[T], err error) {
@@ -77,24 +74,35 @@ func Connect[T any](filename string) (db *SimpleDb[T], err error) {
 	if _, err = os.Stat(dbPath); err != nil {
 		os.Mkdir(dbPath, 0700)
 	}
+
 	if _, err = os.Stat(infoFilePath); err == nil {
+
 		db, err = readDbInfo[T](infoFilePath) // read existing database
+		if err != nil {
+			return
+		}
+		db.dataFile, err = openDbFile(dataFilePath)
+		if err != nil {
+			return
+		}
+		err = db.rebuildOffsets()
 		if err != nil {
 			return
 		}
 	} else {
 		db = &SimpleDb[T]{} // create new database
-		db.Offsets = make(OffsetsData)
+		db.offsets = make(OffsetsData)
+		db.dataFile, err = openDbFile(dataFilePath)
 	}
-	db.Cache.data = make(map[DbItemID]*DbItem[T])
-	db.queue = make([]DbItemID, 0)
 
-	db.dataFile, err = openDbFile(dataFilePath) // open data file for reading and writing
+	db.Cache.data = make(map[DbItemID]*DbItem[T])
+	db.Cache.queue = make([]DbItemID, 0)
+
 	if err != nil {
 		return nil, fmt.Errorf("error opening database file: %w", err)
 	}
-	db.infoFilePath = infoFilePath
 	db.dataFilePath = dataFilePath
+
 	return
 }
 
@@ -109,9 +117,6 @@ func (db *SimpleDb[T]) Kill(dbName string) (err error) {
 	db.queue = nil
 	if err = os.Remove(db.dataFilePath); err != nil {
 		return fmt.Errorf("error removing datafile: %w", err)
-	}
-	if err = os.Remove(db.infoFilePath); err != nil {
-		return fmt.Errorf("error removing infofile: %w", err)
 	}
 	return
 }
@@ -151,15 +156,16 @@ func (db *SimpleDb[T]) Append(itemData *T) (id DbItemID, err error) {
 		return 0, fmt.Errorf("error writing datafile: %w", err)
 	}
 
-	db.Offsets[item.Id] = db.CurrOffset
-	db.CurrOffset += int64(bytesWritten)
+	db.offsets[item.Id] = db.currOffset
+	db.currOffset += int64(bytesWritten)
 	db.addToMemCache(&item)
 	return item.Id, nil
 }
 
 func (db *SimpleDb[T]) Get(id DbItemID) (rd *T, err error) {
+
 	// check if that object has ever been created
-	seek, ok := db.Offsets[id]
+	seek, ok := db.offsets[id]
 	if !ok {
 		return nil, errors.New("item not found in the database")
 	}
@@ -171,14 +177,12 @@ func (db *SimpleDb[T]) Get(id DbItemID) (rd *T, err error) {
 	// if object is not in the mem cache, read it from the database file
 	db.dataFile.Seek(seek, 0)
 
-	var l []byte = []byte{0, 0} // two bytes
-	var n int
-	if n, err = db.dataFile.Read(l); err != nil || n != 2 {
+	var itemLen uint16
+	if itemLen, err = readInt16(db.dataFile); err != nil {
 		return nil, fmt.Errorf("error reading datafile: %w", err)
 	}
 
-	itemLen := binary.LittleEndian.Uint16(l)
-
+	var n int
 	var data []byte = make([]byte, itemLen)
 	if n, err = db.dataFile.Read(data); err != nil || n != int(itemLen) {
 		return nil, fmt.Errorf("error reading datafile: %w", err)
@@ -193,17 +197,8 @@ func (db *SimpleDb[T]) Get(id DbItemID) (rd *T, err error) {
 }
 
 func (db *SimpleDb[T]) Close() (err error) {
-	var data []byte
 
-	db.dataFile.Close()
-
-	if data, err = json.Marshal(db); err != nil {
-		return fmt.Errorf("error marshalling infofile: %w", err)
-	}
-	if err = os.WriteFile(db.infoFilePath, data, 0644); err != nil {
-		return fmt.Errorf("error saving infofile: %w", err)
-	}
-	return
+	return db.dataFile.Close()
 }
 
 func readDbInfo[T any](file string) (db *SimpleDb[T], err error) {
@@ -235,9 +230,48 @@ func (db *SimpleDb[T]) getFromMemCache(id DbItemID) (item *DbItem[T], ok bool) {
 }
 
 func (db *SimpleDb[T]) genNewId() (id DbItemID) {
-	id = db.ItemCounter
-	db.ItemCounter++
+	id = db.itemCounter
+	db.itemCounter++
 	return
+}
+
+func readInt16(file *os.File) (val uint16, err error) {
+	var l []byte = []byte{0, 0} // two bytes
+	var n int
+	if n, err = file.Read(l); err != nil || n != 2 {
+		return 0, fmt.Errorf("error reading datafile: %w", err)
+	}
+	return binary.LittleEndian.Uint16(l), nil
+}
+func (db *SimpleDb[T]) rebuildOffsets() (err error) {
+	var (
+		curpos int64
+		skip   uint16
+		count  int
+	)
+
+	db.offsets = make(OffsetsData)
+loop:
+	for {
+		_, err = db.dataFile.Seek(curpos, 0) // go to file start
+		if err != nil {
+			return err
+		}
+		skip, err = readInt16(db.dataFile)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break loop
+			} else {
+				return err
+			}
+		}
+		db.offsets[DbItemID(count)] = curpos
+		curpos += int64(skip) + 2
+		count++
+	}
+	db.currOffset = curpos
+	db.itemCounter = DbItemID(count)
+	return nil
 }
 
 func unmarshalAny[T any](bytes []byte, out *T) error {
