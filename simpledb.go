@@ -196,23 +196,16 @@ func (db *SimpleDb[T]) Get(id DbItemID) (rd *T, err error) {
 		return nil, fmt.Errorf("error reading datafile: %w", err)
 	}
 
-	readData := new(DbItem[T])
+	newData := &DbItem[T]{}
 
 	var buff = bytes.NewBuffer(data)
 	dec := gob.NewDecoder(buff)
-	err = dec.Decode(&readData)
-	if err != nil {
-		log.Fatal("decode:", err)
+	if err = dec.Decode(&newData); err != nil {
+		return nil, fmt.Errorf("error decode: %w", err)
 	}
 
-	// if err = unmarshalAny(data, readData); err != nil {
-	// 	return nil, fmt.Errorf("error unmarshalling: %w", err)
-	// }
-	if readData.Id != id {
-		panic("got wrong id")
-	}
-	db.addToMemCache(readData)
-	return &readData.Data, err
+	db.addToMemCache(newData)
+	return &newData.Data, err
 }
 
 func (db *SimpleDb[T]) Close() (err error) {
