@@ -165,9 +165,6 @@ func (db *SimpleDb[T]) Get(id DbItemID) (rd *T, err error) {
 	}
 
 	if object, ok := db.getFromMemCache(id); ok {
-		if object == nil {
-			panic("nil object")
-		}
 		return &(object.Data), nil
 	}
 
@@ -187,17 +184,12 @@ func (db *SimpleDb[T]) Get(id DbItemID) (rd *T, err error) {
 		return nil, fmt.Errorf("error reading datafile: %w", err)
 	}
 
-	// log.Debug(string(data[:]))
-
-	readData := new(DbItem[T])
-	if err = unmarshalAny(data, readData); err != nil {
+	newData := new(DbItem[T])
+	if err = unmarshalAny(data, newData); err != nil {
 		return nil, fmt.Errorf("error unmarshalling: %w", err)
 	}
-	if readData.Id != id {
-		panic("got wrong id")
-	}
-	db.addToMemCache(readData)
-	return &readData.Data, err
+	db.addToMemCache(newData)
+	return &newData.Data, err
 }
 
 func (db *SimpleDb[T]) Close() (err error) {
@@ -237,10 +229,6 @@ func (db *SimpleDb[T]) getFromMemCache(id DbItemID) (item *DbItem[T], ok bool) {
 	item, ok = db.Cache.data[id]
 	db.Cache.requests++
 	if ok {
-		if item == nil {
-
-			panic("nil object")
-		}
 		db.Cache.hits++
 	}
 	return

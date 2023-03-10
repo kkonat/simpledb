@@ -164,7 +164,7 @@ func BenchmarkCache(b *testing.B) {
 	db.Kill("benchmark")
 	db, _ = Connect[benchmarkData]("benchmark")
 
-	var numElements = 10 * MemCacheMaxItems
+	var numElements = int(1.33 * MemCacheMaxItems)
 
 	reference := make(map[DbItemID]string)
 	for n := 0; n < numElements; n++ {
@@ -175,12 +175,11 @@ func BenchmarkCache(b *testing.B) {
 	db.Close()
 
 	db, _ = Connect[benchmarkData]("benchmark")
-	log.Info("Benchmarking  : ", b.N, " itera")
 	for n := 0; n < b.N; n++ {
 		rndNo := DbItemID(rand.Intn(numElements))
 		if _, err = db.Get(rndNo); err != nil {
 			b.Error("get failed")
 		}
 	}
-	log.Info("Cache Hit rate: ", db.hitRate(), " %")
+	log.Info("-> ", b.N, " iterations. Cache Hit rate: ", db.hitRate(), " %")
 }
