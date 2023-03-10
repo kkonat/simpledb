@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,18 +29,18 @@ type DbItemID int32
 // type Hashmap map[int64][]DbItemID
 type OffsetsData map[DbItemID]int64
 
-type MemCache[T any] struct {
+type Cache[T any] struct {
 	data     map[DbItemID]*DbItem[T]
 	queue    []DbItemID
 	requests uint64
 	hits     uint64
 }
 
-func (m MemCache[T]) hitRate() (float64, error) {
+func (m Cache[T]) hitRate() (float64, error) {
 	if m.requests > 0 {
 		return float64(m.hits) / float64(m.requests), nil
 	} else {
-		return 0, errors.New("No requests yet")
+		return 0, errors.New("no requests yet")
 	}
 }
 
@@ -48,7 +49,7 @@ type SimpleDb[T any] struct {
 	dataFilePath string   `json:"-"`
 	dataFile     *os.File `json:"-"`
 
-	MemCache[T]
+	Cache[T]
 	ItemCounter DbItemID
 	CurrOffset  int64
 	Offsets     OffsetsData
@@ -77,7 +78,6 @@ func Connect[T any](filename string) (db *SimpleDb[T], err error) {
 		os.Mkdir(dbPath, 0700)
 	}
 	if _, err = os.Stat(infoFilePath); err == nil {
-		log.Info(infoFilePath + " database already exists\nReading in\n")
 		db, err = readDbInfo[T](infoFilePath) // read existing database
 		if err != nil {
 			return
@@ -86,10 +86,13 @@ func Connect[T any](filename string) (db *SimpleDb[T], err error) {
 		db = &SimpleDb[T]{} // create new database
 		db.Offsets = make(OffsetsData)
 	}
-	db.MemCache.data = make(map[DbItemID]*DbItem[T])
+	db.Cache.data = make(map[DbItemID]*DbItem[T])
 	db.queue = make([]DbItemID, 0)
 
 	db.dataFile, err = openDbFile(dataFilePath) // open data file for reading and writing
+	if err != nil {
+		return nil, fmt.Errorf("error opening database file: %w", err)
+	}
 	db.infoFilePath = infoFilePath
 	db.dataFilePath = dataFilePath
 	return
@@ -102,10 +105,14 @@ func (db *SimpleDb[T]) Kill(dbName string) (err error) {
 		return errors.New("security check failed: invalid db name provided")
 	}
 	db.dataFile.Close()
-	db.MemCache.data = nil
+	db.Cache.data = nil
 	db.queue = nil
-	err = os.RemoveAll(dbPath)
-	log.Info("deleting db")
+	if err = os.Remove(db.dataFilePath); err != nil {
+		return fmt.Errorf("error removing datafile: %w", err)
+	}
+	if err = os.Remove(db.infoFilePath); err != nil {
+		return fmt.Errorf("error removing infofile: %w", err)
+	}
 	return
 }
 
@@ -125,9 +132,8 @@ func (db *SimpleDb[T]) Append(itemData T) (id DbItemID, err error) {
 		Data:     itemData,
 	}
 
-	data, err = json.Marshal(item)
-	if err != nil {
-		return
+	if data, err = json.Marshal(item); err != nil {
+		return 0, fmt.Errorf("error marshalling: %w", err)
 	}
 
 	// write next data chunk
@@ -142,7 +148,7 @@ func (db *SimpleDb[T]) Append(itemData T) (id DbItemID, err error) {
 
 	// write everything at once (pretending to be atomic)
 	if bytesWritten, err = db.dataFile.Write(extdata); err != nil {
-		return 0, err
+		return 0, fmt.Errorf("error writing datafile: %w", err)
 	}
 
 	db.Offsets[item.Id] = db.CurrOffset
@@ -163,38 +169,26 @@ func (db *SimpleDb[T]) Get(id DbItemID) (rd *T, err error) {
 	}
 
 	// if object is not in the mem cache, read it from the database file
-	log.Debug("seek:", seek)
-
 	db.dataFile.Seek(seek, 0)
 
 	var l []byte = []byte{0, 0} // two bytes
 	var n int
-	n, err = db.dataFile.Read(l)
-	if err != nil {
-		return
+	if n, err = db.dataFile.Read(l); err != nil || n != 2 {
+		return nil, fmt.Errorf("error reading datafile: %w", err)
 	}
-
-	log.Debug("bytes read:", n)
 
 	itemLen := binary.LittleEndian.Uint16(l)
 
-	log.Debug("itemLen:", itemLen, ":", l[0], l[1])
-
 	var data []byte = make([]byte, itemLen)
-	n, err = db.dataFile.Read(data)
-	if err != nil {
-		return
+	if n, err = db.dataFile.Read(data); err != nil || n != int(itemLen) {
+		return nil, fmt.Errorf("error reading datafile: %w", err)
 	}
 
-	log.Debug("bytes read:", n)
-	log.Debug(string(data[:]))
+	// log.Debug(string(data[:]))
 
 	readData := new(DbItem[T])
-	err = unmarshalAny(data, readData)
-	log.Debug("json:", readData)
-	if err != nil {
-		log.Debug("error unmarshaling", err)
-		return
+	if err = unmarshalAny(data, readData); err != nil {
+		return nil, fmt.Errorf("error unmarshalling: %w", err)
 	}
 	if readData.Id != id {
 		panic("got wrong id")
@@ -208,11 +202,12 @@ func (db *SimpleDb[T]) Close() (err error) {
 
 	db.dataFile.Close()
 
-	data, err = json.Marshal(db)
-	if err != nil {
-		return
+	if data, err = json.Marshal(db); err != nil {
+		return fmt.Errorf("error marshalling infofile: %w", err)
 	}
-	err = os.WriteFile(db.infoFilePath, data, 0644)
+	if err = os.WriteFile(db.infoFilePath, data, 0644); err != nil {
+		return fmt.Errorf("error saving infofile: %w", err)
+	}
 	return
 }
 
@@ -225,9 +220,8 @@ func (db *SimpleDb[T]) Flush() error {
 
 func readDbInfo[T any](file string) (db *SimpleDb[T], err error) {
 	var data []byte
-	data, err = os.ReadFile(file)
-	if err != nil {
-		return
+	if data, err = os.ReadFile(file); err != nil {
+		return nil, fmt.Errorf("error reading dBfile: %w", err)
 	}
 	db = &SimpleDb[T]{}
 	err = json.Unmarshal(data, db)
@@ -236,18 +230,18 @@ func readDbInfo[T any](file string) (db *SimpleDb[T], err error) {
 
 func (db *SimpleDb[T]) addToMemCache(item *DbItem[T]) {
 
-	if len(db.MemCache.queue) == MemCacheMaxItems {
-		db.MemCache.data[db.MemCache.queue[0]] = nil
-		db.MemCache.queue = db.queue[1:]
+	if len(db.Cache.queue) == MemCacheMaxItems {
+		db.Cache.data[db.Cache.queue[0]] = nil
+		db.Cache.queue = db.queue[1:]
 	}
-	db.MemCache.data[item.Id] = item
-	db.MemCache.queue = append(db.MemCache.queue, item.Id)
+	db.Cache.data[item.Id] = item
+	db.Cache.queue = append(db.Cache.queue, item.Id)
 }
 func (db *SimpleDb[T]) getFromMemCache(id DbItemID) (item *DbItem[T], ok bool) {
-	item, ok = db.MemCache.data[id]
-	db.MemCache.requests++
+	item, ok = db.Cache.data[id]
+	db.Cache.requests++
 	if ok {
-		db.MemCache.hits++
+		db.Cache.hits++
 	}
 	return
 }

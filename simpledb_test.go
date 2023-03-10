@@ -82,19 +82,19 @@ func TestNewCloseOpen(t *testing.T) {
 	if err == nil {
 		t.Error("got non existing object")
 	}
-	hr, err := db2.MemCache.hitRate()
+	hr, err := db2.Cache.hitRate()
 	if hr != 0 {
 		log.Infof("Cache hit rate %.2f, %v", hr*100, err)
 		t.Error("wrong hit rate")
 	}
 	_, _ = db2.Get(id2)
-	hr, _ = db2.MemCache.hitRate()
+	hr, _ = db2.Cache.hitRate()
 	if hr != 0.5 {
 		log.Infof("Cache hit rate %f, %v", hr, err)
 		t.Error("wrong hit rate")
 	}
 	_, _ = db1.Get(id2)
-	hr, _ = db1.MemCache.hitRate()
+	hr, _ = db1.Cache.hitRate()
 	if hr != 1 {
 		log.Infof("Cache hit rate %f, %v", hr, err)
 		t.Error("wrong hit rate")
