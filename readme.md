@@ -56,3 +56,6 @@ I wrote this package try some of the following go fetures out:
 - TDD, benchmarking
 - simple data structures (map, queue)
 - module 
+
+
+

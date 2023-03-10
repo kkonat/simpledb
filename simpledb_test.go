@@ -153,6 +153,63 @@ func TestCache(t *testing.T) {
 	}
 	log.Info("Cache Hit rate: ", db.hitRate(), " %")
 }
+
+func genRandomSequence(N int) []int {
+
+	var seq = make([]int, N)
+
+	for i := 1; i < N; i++ {
+
+		p := 1 + rand.Intn(N-1)
+
+		if seq[p] == 0 {
+			seq[p] = i
+		} else {
+			for ; p < N && seq[p] != 0; p++ {
+			}
+			if p < N {
+				seq[p] = i
+			} else {
+				for p = 1; p < N && seq[p] != 0; p++ {
+				}
+				if p < N {
+					seq[p] = i
+				} else {
+					panic("No place left")
+				}
+			}
+		}
+	}
+	return seq
+}
+
+func TestDeleteLogic(t *testing.T) {
+	var (
+		d   *benchmarkData
+		err error
+	)
+	const N = MemCacheMaxItems * 2
+	seq := genRandomSequence(N)
+	db, _ := Connect[benchmarkData]("benchmark")
+	db.Kill("benchmark")
+	db, _ = Connect[benchmarkData]("benchmark")
+	for n := 0; n < N; n++ {
+		d = NewBenchmarkData(n)
+		db.Append(d)
+	}
+	for n := 0; n < N; n++ {
+		err = db.Delete(DbItemID(seq[n]))
+		if err != nil {
+			t.Error("should be able to delete")
+		}
+	}
+	err = db.Delete(0)
+	if err == nil {
+		t.Error("should not be able to delete")
+	}
+	l := len(db.toBeDeleted)
+	log.Info("len to b del ", l)
+}
 func BenchmarkCache(b *testing.B) {
 	var (
 		d   *benchmarkData
@@ -163,7 +220,7 @@ func BenchmarkCache(b *testing.B) {
 	db.Kill("benchmark")
 	db, _ = Connect[benchmarkData]("benchmark")
 
-	var numElements = int(1.33 * MemCacheMaxItems)
+	var numElements = int(MemCacheMaxItems * 2)
 
 	reference := make(map[DbItemID]string)
 	for n := 0; n < numElements; n++ {

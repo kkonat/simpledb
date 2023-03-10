@@ -50,6 +50,7 @@ type SimpleDb[T any] struct {
 	dataFile     *os.File
 
 	Cache[T]
+	toBeDeleted map[DbItemID]struct{}
 	itemCounter DbItemID
 	currOffset  int64
 	offsets     OffsetsData
@@ -91,7 +92,7 @@ func Connect[T any](filename string) (db *SimpleDb[T], err error) {
 
 	db.Cache.data = make(map[DbItemID]*DbItem[T])
 	db.Cache.queue = make([]DbItemID, 0)
-
+	db.toBeDeleted = make(map[DbItemID]struct{})
 	if err != nil {
 		return nil, fmt.Errorf("error opening database file: %w", err)
 	}
@@ -155,6 +156,28 @@ func (db *SimpleDb[T]) Append(itemData *T) (id DbItemID, err error) {
 	db.addToMemCache(&item)
 	return item.Id, nil
 }
+func (db *SimpleDb[T]) Delete(id DbItemID) error {
+
+	if _, ok := db.offsets[id]; !ok {
+		return errors.New("item not found in the database")
+	}
+
+	if _, ok := db.toBeDeleted[id]; ok {
+		return errors.New("item already deleted")
+	}
+
+	if item, ok := db.Cache.data[id]; ok {
+		// mark object in the Cache as deleted
+		if item.delete {
+			return errors.New("item already deleted")
+		}
+		item.delete = true
+	} else {
+		db.toBeDeleted[id] = struct{}{}
+	}
+
+	return nil
+}
 
 func (db *SimpleDb[T]) Get(id DbItemID) (rd *T, err error) {
 
@@ -165,7 +188,13 @@ func (db *SimpleDb[T]) Get(id DbItemID) (rd *T, err error) {
 	}
 
 	if object, ok := db.getFromMemCache(id); ok {
-		return &(object.Data), nil
+		if !object.delete { // if in cache and not deleted
+			return &(object.Data), nil
+		}
+	}
+	// if need to read from disk an object, which was marked as to be deleted
+	if _, ok := db.toBeDeleted[id]; ok {
+		return nil, errors.New("item not found in the database")
 	}
 
 	// if object is not in the mem cache, read it from the database file
@@ -193,11 +222,18 @@ func (db *SimpleDb[T]) Get(id DbItemID) (rd *T, err error) {
 func (db *SimpleDb[T]) Close() (err error) {
 
 	return db.dataFile.Close()
+	// TODO
+	// db.toBeDeleted is a map of all objects marked to be toBeDeleted
+	// need to copy the database, while skipping this object
 }
 
 func (db *SimpleDb[T]) addToMemCache(item *DbItem[T]) {
 
 	if len(db.Cache.queue) == MemCacheMaxItems {
+		disposed := db.Cache.queue[0]
+		if db.Cache.data[disposed].delete {
+			db.toBeDeleted[disposed] = struct{}{}
+		}
 		delete(db.Cache.data, db.Cache.queue[0])
 		db.Cache.queue = db.queue[1:]
 	}
