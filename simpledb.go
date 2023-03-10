@@ -61,7 +61,6 @@ type DbItem[T any] struct {
 	Id       DbItemID
 	Data     T
 	LastUsed int64
-	delete   bool
 	// hash 		 int64
 }
 
@@ -158,22 +157,29 @@ func (db *SimpleDb[T]) Append(itemData *T) (id DbItemID, err error) {
 }
 func (db *SimpleDb[T]) Delete(id DbItemID) error {
 
+	// check if ever was created
 	if _, ok := db.offsets[id]; !ok {
 		return errors.New("item not found in the database")
 	}
 
+	// check if not already deleted
 	if _, ok := db.toBeDeleted[id]; ok {
 		return errors.New("item already deleted")
-	}
-
-	if item, ok := db.Cache.data[id]; ok {
-		// mark object in the Cache as deleted
-		if item.delete {
-			return errors.New("item already deleted")
-		}
-		item.delete = true
 	} else {
 		db.toBeDeleted[id] = struct{}{}
+	}
+
+	// check if cached
+	if _, ok := db.Cache.data[id]; ok {
+		// delete from cache
+		delete(db.Cache.data, id)
+		//find in queue
+		for i := 0; i < len(db.Cache.queue); i++ {
+			if db.Cache.queue[i] == id {
+				db.Cache.queue = append(db.Cache.queue[:i], db.Cache.queue[i+1:]...)
+				break
+			}
+		}
 	}
 
 	return nil
@@ -188,7 +194,8 @@ func (db *SimpleDb[T]) Get(id DbItemID) (rd *T, err error) {
 	}
 
 	if object, ok := db.getFromMemCache(id); ok {
-		if !object.delete { // if in cache and not deleted
+
+		if _, ok := db.toBeDeleted[id]; !ok { // if in cache and not deleted
 			return &(object.Data), nil
 		}
 	}
@@ -230,10 +237,6 @@ func (db *SimpleDb[T]) Close() (err error) {
 func (db *SimpleDb[T]) addToMemCache(item *DbItem[T]) {
 
 	if len(db.Cache.queue) == MemCacheMaxItems {
-		disposed := db.Cache.queue[0]
-		if db.Cache.data[disposed].delete {
-			db.toBeDeleted[disposed] = struct{}{}
-		}
 		delete(db.Cache.data, db.Cache.queue[0])
 		db.Cache.queue = db.queue[1:]
 	}

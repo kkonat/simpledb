@@ -189,6 +189,7 @@ func TestDeleteLogic(t *testing.T) {
 		err error
 	)
 	const N = MemCacheMaxItems * 2
+	log.Info("Testing N = ", N)
 	seq := genRandomSequence(N)
 	db, _ := Connect[benchmarkData]("benchmark")
 	db.Kill("benchmark")
@@ -208,7 +209,13 @@ func TestDeleteLogic(t *testing.T) {
 		t.Error("should not be able to delete")
 	}
 	l := len(db.toBeDeleted)
-	log.Info("len to b del ", l)
+	if l != N {
+		t.Error("there should be ", N, " deleted")
+	}
+	l = len(db.Cache.queue)
+	if l != 0 {
+		t.Error("cache should be empty, but is :", l)
+	}
 }
 func BenchmarkCache(b *testing.B) {
 	var (
