@@ -36,11 +36,11 @@ type Cache[T any] struct {
 	hits     uint64
 }
 
-func (m Cache[T]) hitRate() (float64, error) {
+func (m Cache[T]) hitRate() float64 {
 	if m.requests > 0 {
-		return float64(m.hits) / float64(m.requests), nil
+		return float64(m.hits) / float64(m.requests) * 100
 	} else {
-		return 0, errors.New("no requests yet")
+		return 0
 	}
 }
 
@@ -116,7 +116,7 @@ func (db *SimpleDb[T]) Kill(dbName string) (err error) {
 	return
 }
 
-func (db *SimpleDb[T]) Append(itemData T) (id DbItemID, err error) {
+func (db *SimpleDb[T]) Append(itemData *T) (id DbItemID, err error) {
 	var (
 		mtx          sync.Mutex
 		data         []byte
@@ -129,7 +129,7 @@ func (db *SimpleDb[T]) Append(itemData T) (id DbItemID, err error) {
 	item := DbItem[T]{
 		Id:       db.genNewId(),
 		LastUsed: time.Now().Unix(),
-		Data:     itemData,
+		Data:     *itemData,
 	}
 
 	if data, err = json.Marshal(item); err != nil {
@@ -165,7 +165,10 @@ func (db *SimpleDb[T]) Get(id DbItemID) (rd *T, err error) {
 	}
 
 	if object, ok := db.getFromMemCache(id); ok {
-		return &object.Data, nil
+		if object == nil {
+			panic("nil object")
+		}
+		return &(object.Data), nil
 	}
 
 	// if object is not in the mem cache, read it from the database file
@@ -211,13 +214,6 @@ func (db *SimpleDb[T]) Close() (err error) {
 	return
 }
 
-func (db *SimpleDb[T]) Flush() error {
-	var err error
-	db.dataFile.Close()
-	db.dataFile, err = openDbFile(db.dataFilePath) // reopen
-	return err
-}
-
 func readDbInfo[T any](file string) (db *SimpleDb[T], err error) {
 	var data []byte
 	if data, err = os.ReadFile(file); err != nil {
@@ -231,7 +227,7 @@ func readDbInfo[T any](file string) (db *SimpleDb[T], err error) {
 func (db *SimpleDb[T]) addToMemCache(item *DbItem[T]) {
 
 	if len(db.Cache.queue) == MemCacheMaxItems {
-		db.Cache.data[db.Cache.queue[0]] = nil
+		delete(db.Cache.data, db.Cache.queue[0])
 		db.Cache.queue = db.queue[1:]
 	}
 	db.Cache.data[item.Id] = item
@@ -241,6 +237,10 @@ func (db *SimpleDb[T]) getFromMemCache(id DbItemID) (item *DbItem[T], ok bool) {
 	item, ok = db.Cache.data[id]
 	db.Cache.requests++
 	if ok {
+		if item == nil {
+
+			panic("nil object")
+		}
 		db.Cache.hits++
 	}
 	return

@@ -1,6 +1,7 @@
 package simpledb
 
 import (
+	"math/rand"
 	"testing"
 
 	log "github.com/sirupsen/logrus"
@@ -45,14 +46,14 @@ func TestNewCloseOpen(t *testing.T) {
 		t.Errorf("failed to create database: %v", err)
 	}
 
-	id1, err := db1.Append(testData[0])
+	id1, err := db1.Append(&testData[0])
 	if err != nil {
 		t.Errorf("Append fail")
 	}
 	if id1 != 0 {
 		t.Error("Bad id")
 	}
-	id2, err := db1.Append(testData[1])
+	id2, err := db1.Append(&testData[1])
 	if err != nil {
 		t.Errorf("Append fail")
 	}
@@ -82,49 +83,104 @@ func TestNewCloseOpen(t *testing.T) {
 	if err == nil {
 		t.Error("got non existing object")
 	}
-	hr, err := db2.Cache.hitRate()
-	if hr != 0 {
-		log.Infof("Cache hit rate %.2f, %v", hr*100, err)
+
+	if hr := db2.Cache.hitRate(); hr != 0 {
+		log.Infof("Cache hit rate %.2f", hr)
 		t.Error("wrong hit rate")
 	}
 	_, _ = db2.Get(id2)
-	hr, _ = db2.Cache.hitRate()
-	if hr != 0.5 {
-		log.Infof("Cache hit rate %f, %v", hr, err)
+
+	if hr := db2.Cache.hitRate(); hr < 50 || hr > 50 {
+		log.Infof("Cache hit rate %f", hr)
 		t.Error("wrong hit rate")
 	}
 	_, _ = db1.Get(id2)
-	hr, _ = db1.Cache.hitRate()
-	if hr != 1 {
-		log.Infof("Cache hit rate %f, %v", hr, err)
+
+	if hr := db1.Cache.hitRate(); hr != 100 {
+		log.Infof("Cache hit rate %f", hr)
 		t.Error("wrong hit rate")
 	}
 }
 
-func TestAppend(t *testing.T) {
+type benchmarkData struct {
+	Value uint
+	Str   string
+}
 
-	db, err := Connect[Person]("testdb")
-	if err != nil {
-		t.Errorf("failed to create database: %v", err)
+var letterRunes = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+
+func NewBenchmarkData(n int) *benchmarkData {
+	d := &benchmarkData{Value: uint(n)}
+	b := make([]rune, 16)
+	for i := range b {
+		b[i] = letterRunes[rand.Intn(len(letterRunes))]
 	}
-	defer db.Close()
+	d.Str = string(b)
+	return d
+}
 
-	for _, p := range testData {
-		_, err := db.Append(p)
-		if err != nil {
-			t.Error("failed to add item")
+func TestCache(t *testing.T) {
+	var (
+		d   *benchmarkData
+		err error
+	)
+
+	db, _ := Connect[benchmarkData]("benchmark")
+	db.Kill("benchmark")
+	db, _ = Connect[benchmarkData]("benchmark")
+
+	// gen 2 x times the cache capacity
+	// so the expected hitrate is 50%
+	var numElements = 2 * MemCacheMaxItems
+
+	reference := make(map[DbItemID]string)
+	for n := 0; n < numElements; n++ {
+		d = NewBenchmarkData(n)
+		db.Append(d)
+		reference[DbItemID(n)] = d.Str
+	}
+	db.Close()
+
+	db, _ = Connect[benchmarkData]("benchmark")
+	for n := 0; n < numElements; n++ {
+		rndNo := DbItemID(rand.Intn(numElements))
+		if d, err = db.Get(rndNo); err != nil {
+			t.Error("get failed")
 		}
-		// r, err := db.Get(id)
-		// result := r.(Person)
-
-		// if err != nil {
-		// 	t.Error("failed to get  item")
-		// }
-		// if result.Name != p.Name ||
-		// 	result.Surname != p.Surname ||
-		// 	result.Age != p.Age {
-		// 	t.Error("data differs")
-		// }
+		if d.Str != reference[DbItemID(rndNo)] {
+			t.Error("values dont match", rndNo)
+		}
 	}
-	db.Flush()
+	log.Info("Cache Hit rate: ", db.hitRate(), " %")
+}
+
+func BenchmarkCache(b *testing.B) {
+	var (
+		d   *benchmarkData
+		err error
+	)
+
+	db, _ := Connect[benchmarkData]("benchmark")
+	db.Kill("benchmark")
+	db, _ = Connect[benchmarkData]("benchmark")
+
+	var numElements = 10 * MemCacheMaxItems
+
+	reference := make(map[DbItemID]string)
+	for n := 0; n < numElements; n++ {
+		d = NewBenchmarkData(n)
+		db.Append(d)
+		reference[DbItemID(n)] = d.Str
+	}
+	db.Close()
+
+	db, _ = Connect[benchmarkData]("benchmark")
+	log.Info("Benchmarking  : ", b.N, " itera")
+	for n := 0; n < b.N; n++ {
+		rndNo := DbItemID(rand.Intn(numElements))
+		if _, err = db.Get(rndNo); err != nil {
+			b.Error("get failed")
+		}
+	}
+	log.Info("Cache Hit rate: ", db.hitRate(), " %")
 }
