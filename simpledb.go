@@ -1,7 +1,9 @@
 package simpledb
 
 import (
+	"bytes"
 	"encoding/binary"
+	"encoding/gob"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -132,9 +134,16 @@ func (db *SimpleDb[T]) Append(itemData *T) (id DbItemID, err error) {
 		Data:     *itemData,
 	}
 
-	if data, err = json.Marshal(item); err != nil {
-		return 0, fmt.Errorf("error marshalling: %w", err)
+	var buff bytes.Buffer
+	enc := gob.NewEncoder(&buff)
+	err = enc.Encode(item)
+	if err != nil {
+		log.Fatal("encode:", err)
 	}
+	data = buff.Bytes()
+	// if data, err = json.Marshal(item); err != nil {
+	// 	return 0, fmt.Errorf("error marshalling: %w", err)
+	// }
 
 	// write next data chunk
 	bytesWritten = 0
@@ -187,12 +196,18 @@ func (db *SimpleDb[T]) Get(id DbItemID) (rd *T, err error) {
 		return nil, fmt.Errorf("error reading datafile: %w", err)
 	}
 
-	// log.Debug(string(data[:]))
-
 	readData := new(DbItem[T])
-	if err = unmarshalAny(data, readData); err != nil {
-		return nil, fmt.Errorf("error unmarshalling: %w", err)
+
+	var buff = bytes.NewBuffer(data)
+	dec := gob.NewDecoder(buff)
+	err = dec.Decode(&readData)
+	if err != nil {
+		log.Fatal("decode:", err)
 	}
+
+	// if err = unmarshalAny(data, readData); err != nil {
+	// 	return nil, fmt.Errorf("error unmarshalling: %w", err)
+	// }
 	if readData.Id != id {
 		panic("got wrong id")
 	}
