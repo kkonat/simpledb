@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,8 +14,9 @@ import (
 )
 
 const (
-	dbPath = "./db"
-	dbExt  = ".json"
+	dbPath           = "./db"
+	dbExt            = ".json"
+	MemCacheMaxItems = 100
 )
 
 func init() {
@@ -25,12 +27,28 @@ type DbItemID int32
 
 // type Hashmap map[int64][]DbItemID
 type OffsetsData map[DbItemID]int64
-type SimpleDb[T any] struct {
-	infoFilePath string `json:"-"`
 
+type MemCache[T any] struct {
+	data     map[DbItemID]*DbItem[T]
+	queue    []DbItemID
+	requests uint64
+	hits     uint64
+}
+
+func (m MemCache[T]) hitRate() (float64, error) {
+	if m.requests > 0 {
+		return float64(m.hits) / float64(m.requests), nil
+	} else {
+		return 0, errors.New("No requests yet")
+	}
+}
+
+type SimpleDb[T any] struct {
+	infoFilePath string   `json:"-"`
 	dataFilePath string   `json:"-"`
 	dataFile     *os.File `json:"-"`
 
+	MemCache[T]
 	ItemCounter DbItemID
 	CurrOffset  int64
 	Offsets     OffsetsData
@@ -48,7 +66,7 @@ type DbItem[T any] struct {
 func init() {
 }
 
-func New[T any](filename string) (db *SimpleDb[T], err error) {
+func Connect[T any](filename string) (db *SimpleDb[T], err error) {
 
 	dbDataFile := filepath.Clean(filename)
 	dir, file := filepath.Split(dbDataFile)
@@ -61,30 +79,33 @@ func New[T any](filename string) (db *SimpleDb[T], err error) {
 	if _, err = os.Stat(infoFilePath); err == nil {
 		log.Info(infoFilePath + " database already exists\nReading in\n")
 		db, err = readDbInfo[T](infoFilePath) // read existing database
+		if err != nil {
+			return
+		}
 	} else {
 		db = &SimpleDb[T]{} // create new database
 		db.Offsets = make(OffsetsData)
 	}
+	db.MemCache.data = make(map[DbItemID]*DbItem[T])
+	db.queue = make([]DbItemID, 0)
+
 	db.dataFile, err = openDbFile(dataFilePath) // open data file for reading and writing
 	db.infoFilePath = infoFilePath
 	db.dataFilePath = dataFilePath
 	return
 }
 
-func readDbInfo[T any](file string) (db *SimpleDb[T], err error) {
-	var data []byte
-	data, err = os.ReadFile(file)
-	if err != nil {
-		return
+func (db *SimpleDb[T]) Kill(dbName string) (err error) {
+	_, file := filepath.Split(db.dataFilePath)
+	name := strings.Split(file, ".")[0]
+	if "data-"+dbName != name {
+		return errors.New("security check failed: invalid db name provided")
 	}
-	db = &SimpleDb[T]{}
-	err = json.Unmarshal(data, db)
-	return
-}
-
-func (db *SimpleDb[T]) getNewId() (id DbItemID) {
-	id = db.ItemCounter
-	db.ItemCounter++
+	db.dataFile.Close()
+	db.MemCache.data = nil
+	db.queue = nil
+	err = os.RemoveAll(dbPath)
+	log.Info("deleting db")
 	return
 }
 
@@ -98,10 +119,8 @@ func (db *SimpleDb[T]) Append(itemData T) (id DbItemID, err error) {
 	mtx.Lock()
 	defer mtx.Unlock()
 
-	id = db.getNewId()
-
 	item := DbItem[T]{
-		Id:       db.ItemCounter,
+		Id:       db.genNewId(),
 		LastUsed: time.Now().Unix(),
 		Data:     itemData,
 	}
@@ -126,19 +145,24 @@ func (db *SimpleDb[T]) Append(itemData T) (id DbItemID, err error) {
 		return 0, err
 	}
 
-	db.Offsets[id] = db.CurrOffset
+	db.Offsets[item.Id] = db.CurrOffset
 	db.CurrOffset += int64(bytesWritten)
-
-	return
+	db.addToMemCache(&item)
+	return item.Id, nil
 }
 
-func (db *SimpleDb[T]) Get(id DbItemID) (rd *DbItem[T], err error) {
+func (db *SimpleDb[T]) Get(id DbItemID) (rd *T, err error) {
+	// check if that object has ever been created
 	seek, ok := db.Offsets[id]
-
 	if !ok {
-		return nil, errors.New("item not found")
+		return nil, errors.New("item not found in the database")
 	}
 
+	if object, ok := db.getFromMemCache(id); ok {
+		return &object.Data, nil
+	}
+
+	// if object is not in the mem cache, read it from the database file
 	log.Debug("seek:", seek)
 
 	db.dataFile.Seek(seek, 0)
@@ -172,7 +196,11 @@ func (db *SimpleDb[T]) Get(id DbItemID) (rd *DbItem[T], err error) {
 		log.Debug("error unmarshaling", err)
 		return
 	}
-	return readData, err
+	if readData.Id != id {
+		panic("got wrong id")
+	}
+	db.addToMemCache(readData)
+	return &readData.Data, err
 }
 
 func (db *SimpleDb[T]) Close() (err error) {
@@ -188,18 +216,53 @@ func (db *SimpleDb[T]) Close() (err error) {
 	return
 }
 
-func unmarshalAny[T any](bytes []byte, out *T) error {
-	if err := json.Unmarshal(bytes, out); err != nil {
-		return err
-	}
-	return nil
-}
-
 func (db *SimpleDb[T]) Flush() error {
 	var err error
 	db.dataFile.Close()
 	db.dataFile, err = openDbFile(db.dataFilePath) // reopen
 	return err
+}
+
+func readDbInfo[T any](file string) (db *SimpleDb[T], err error) {
+	var data []byte
+	data, err = os.ReadFile(file)
+	if err != nil {
+		return
+	}
+	db = &SimpleDb[T]{}
+	err = json.Unmarshal(data, db)
+	return
+}
+
+func (db *SimpleDb[T]) addToMemCache(item *DbItem[T]) {
+
+	if len(db.MemCache.queue) == MemCacheMaxItems {
+		db.MemCache.data[db.MemCache.queue[0]] = nil
+		db.MemCache.queue = db.queue[1:]
+	}
+	db.MemCache.data[item.Id] = item
+	db.MemCache.queue = append(db.MemCache.queue, item.Id)
+}
+func (db *SimpleDb[T]) getFromMemCache(id DbItemID) (item *DbItem[T], ok bool) {
+	item, ok = db.MemCache.data[id]
+	db.MemCache.requests++
+	if ok {
+		db.MemCache.hits++
+	}
+	return
+}
+
+func (db *SimpleDb[T]) genNewId() (id DbItemID) {
+	id = db.ItemCounter
+	db.ItemCounter++
+	return
+}
+
+func unmarshalAny[T any](bytes []byte, out *T) error {
+	if err := json.Unmarshal(bytes, out); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Helper functions

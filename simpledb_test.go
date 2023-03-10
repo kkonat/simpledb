@@ -2,10 +2,12 @@ package simpledb
 
 import (
 	"testing"
+
+	log "github.com/sirupsen/logrus"
 )
 
 func TestNew(t *testing.T) {
-	d, err := New[Person]("testdb")
+	d, err := Connect[Person]("testdb")
 	if err != nil {
 		t.Errorf("failed to create database: %v", err)
 	}
@@ -23,22 +25,43 @@ var testData []Person = []Person{
 	{"Ulrika", "Van der Klompfer", 666},
 }
 
-func TestNewCloseOpen(t *testing.T) {
-	db1, err := New[Person]("testdb")
+func TestKill(t *testing.T) {
+	db1, err := Connect[Person]("testdb")
 	if err != nil {
 		t.Errorf("failed to create database: %v", err)
 	}
-	_, err = db1.Append(testData[0])
+	err = db1.Kill("testdb")
+	if err != nil {
+		t.Errorf("failed to kill database: %v", err)
+	}
+}
+func TestNewCloseOpen(t *testing.T) {
+	db1, _ := Connect[Person]("testdb")
+	db1.Kill("testdb")
+
+	var err error
+	db1, err = Connect[Person]("testdb")
+	if err != nil {
+		t.Errorf("failed to create database: %v", err)
+	}
+
+	id1, err := db1.Append(testData[0])
 	if err != nil {
 		t.Errorf("Append fail")
+	}
+	if id1 != 0 {
+		t.Error("Bad id")
 	}
 	id2, err := db1.Append(testData[1])
 	if err != nil {
 		t.Errorf("Append fail")
 	}
+	if id2 != 1 {
+		t.Error("Bad id")
+	}
 	db1.Close()
 
-	db2, err := New[Person]("testdb")
+	db2, err := Connect[Person]("testdb")
 	if err != nil {
 		t.Errorf("failed to open database: %v", err)
 	}
@@ -48,18 +71,39 @@ func TestNewCloseOpen(t *testing.T) {
 	if db1.ItemCounter != db2.ItemCounter {
 		t.Error("differenc counters")
 	}
-	d, err := db2.Get(id2)
+	pers, err := db2.Get(id2)
 	if err != nil {
 		t.Error("error getting item ", id2, err)
 	}
-	if d.Data.Age != testData[1].Age {
+	if pers.Age != testData[id2].Age {
 		t.Error("Wrong data")
+	}
+	_, err = db2.Get(9999)
+	if err == nil {
+		t.Error("got non existing object")
+	}
+	hr, err := db2.MemCache.hitRate()
+	if hr != 0 {
+		log.Infof("Cache hit rate %.2f, %v", hr*100, err)
+		t.Error("wrong hit rate")
+	}
+	_, _ = db2.Get(id2)
+	hr, _ = db2.MemCache.hitRate()
+	if hr != 0.5 {
+		log.Infof("Cache hit rate %f, %v", hr, err)
+		t.Error("wrong hit rate")
+	}
+	_, _ = db1.Get(id2)
+	hr, _ = db1.MemCache.hitRate()
+	if hr != 1 {
+		log.Infof("Cache hit rate %f, %v", hr, err)
+		t.Error("wrong hit rate")
 	}
 }
 
 func TestAppend(t *testing.T) {
 
-	db, err := New[Person]("testdb")
+	db, err := Connect[Person]("testdb")
 	if err != nil {
 		t.Errorf("failed to create database: %v", err)
 	}
