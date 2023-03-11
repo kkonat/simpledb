@@ -31,14 +31,14 @@ func TestKill(t *testing.T) {
 	if err != nil {
 		t.Errorf("failed to create database: %v", err)
 	}
-	err = db1.Kill("testdb")
+	err = Destroy(db1, "testdb")
 	if err != nil {
 		t.Errorf("failed to kill database: %v", err)
 	}
 }
 func TestNewCloseOpen(t *testing.T) {
 	db1, _ := Connect[Person]("testdb")
-	db1.Kill("testdb")
+	Destroy(db1, "testdb")
 
 	var err error
 	db1, err = Connect[Person]("testdb")
@@ -69,7 +69,7 @@ func TestNewCloseOpen(t *testing.T) {
 	if db1.currOffset != db2.currOffset {
 		t.Error("different offsets")
 	}
-	if db1.itemCounter != db2.itemCounter {
+	if db1.itemsNo != db2.itemsNo {
 		t.Error("differenc counters")
 	}
 	pers, err := db2.Get(id2)
@@ -84,19 +84,19 @@ func TestNewCloseOpen(t *testing.T) {
 		t.Error("got non existing object")
 	}
 
-	if hr := db2.Cache.hitRate(); hr != 0 {
+	if hr := db2.Cache.getHitRate(); hr != 0 {
 		log.Infof("Cache hit rate %.2f", hr)
 		t.Error("wrong hit rate")
 	}
 	_, _ = db2.Get(id2)
 
-	if hr := db2.Cache.hitRate(); hr < 50 || hr > 50 {
+	if hr := db2.Cache.getHitRate(); hr < 50 || hr > 50 {
 		log.Infof("Cache hit rate %f", hr)
 		t.Error("wrong hit rate")
 	}
 	_, _ = db1.Get(id2)
 
-	if hr := db1.Cache.hitRate(); hr != 100 {
+	if hr := db1.Cache.getHitRate(); hr != 100 {
 		log.Infof("Cache hit rate %f", hr)
 		t.Error("wrong hit rate")
 	}
@@ -126,12 +126,12 @@ func TestCache(t *testing.T) {
 	)
 
 	db, _ := Connect[benchmarkData]("benchmark")
-	db.Kill("benchmark")
+	Destroy(db, "benchmark")
 	db, _ = Connect[benchmarkData]("benchmark")
 
 	// gen 2 x times the cache capacity
 	// so the expected hitrate is 50%
-	var numElements = 2 * MemCacheMaxItems
+	var numElements = 2 * CacheMaxItems
 
 	reference := make(map[DbItemID]string)
 	for n := 0; n < numElements; n++ {
@@ -151,7 +151,7 @@ func TestCache(t *testing.T) {
 			t.Error("values dont match", rndNo)
 		}
 	}
-	log.Info("Cache Hit rate: ", db.hitRate(), " %")
+	log.Info("Cache Hit rate: ", db.getHitRate(), " %")
 }
 
 func genRandomSequence(N int) []int {
@@ -188,11 +188,11 @@ func TestDeleteLogic(t *testing.T) {
 		d   *benchmarkData
 		err error
 	)
-	const N = MemCacheMaxItems * 2
+	const N = CacheMaxItems * 2
 	log.Info("Testing N = ", N)
 	seq := genRandomSequence(N)
 	db, _ := Connect[benchmarkData]("benchmark")
-	db.Kill("benchmark")
+	Destroy(db, "benchmark")
 	db, _ = Connect[benchmarkData]("benchmark")
 	for n := 0; n < N; n++ {
 		d = NewBenchmarkData(n)
@@ -208,7 +208,7 @@ func TestDeleteLogic(t *testing.T) {
 	if err == nil {
 		t.Error("should not be able to delete")
 	}
-	l := len(db.toBeDeleted)
+	l := len(db.deleteFlag)
 	if l != N {
 		t.Error("there should be ", N, " deleted")
 	}
@@ -224,10 +224,10 @@ func BenchmarkCache(b *testing.B) {
 	)
 
 	db, _ := Connect[benchmarkData]("benchmark")
-	db.Kill("benchmark")
+	Destroy(db, "benchmark")
 	db, _ = Connect[benchmarkData]("benchmark")
 
-	var numElements = int(MemCacheMaxItems * 2)
+	var numElements = int(CacheMaxItems * 2)
 
 	reference := make(map[DbItemID]string)
 	for n := 0; n < numElements; n++ {
@@ -244,5 +244,5 @@ func BenchmarkCache(b *testing.B) {
 			b.Error("get failed")
 		}
 	}
-	log.Info("-> ", b.N, " iterations. Cache Hit rate: ", db.hitRate(), " %")
+	log.Info("-> ", b.N, " iterations. Cache Hit rate: ", db.getHitRate(), " %")
 }
