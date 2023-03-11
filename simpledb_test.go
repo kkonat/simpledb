@@ -1,6 +1,7 @@
 package simpledb
 
 import (
+	"fmt"
 	"math/rand"
 	"testing"
 
@@ -46,14 +47,14 @@ func TestNewCloseOpen(t *testing.T) {
 		t.Errorf("failed to create database: %v", err)
 	}
 
-	id1, err := db1.Append(&testData[0])
+	id1, err := db1.Append("Person1", &testData[0])
 	if err != nil {
 		t.Errorf("Append fail")
 	}
 	if id1 != 0 {
 		t.Error("Bad id")
 	}
-	id2, err := db1.Append(&testData[1])
+	id2, err := db1.Append("Person2", &testData[1])
 	if err != nil {
 		t.Errorf("Append fail")
 	}
@@ -66,20 +67,20 @@ func TestNewCloseOpen(t *testing.T) {
 	if err != nil {
 		t.Errorf("failed to open database: %v", err)
 	}
-	if db1.currOffset != db2.currOffset {
+	if db1.currentOffset != db2.currentOffset {
 		t.Error("different offsets")
 	}
-	if db1.itemsNo != db2.itemsNo {
+	if db1.capacity != db2.capacity {
 		t.Error("differenc counters")
 	}
-	pers, err := db2.Get(id2)
+	pers, err := db2.GetById(id2)
 	if err != nil {
 		t.Error("error getting item ", id2, err)
 	}
 	if pers.Age != testData[id2].Age {
 		t.Error("Wrong data")
 	}
-	_, err = db2.Get(9999)
+	_, err = db2.GetById(9999)
 	if err == nil {
 		t.Error("got non existing object")
 	}
@@ -88,13 +89,13 @@ func TestNewCloseOpen(t *testing.T) {
 		log.Infof("Cache hit rate %.2f", hr)
 		t.Error("wrong hit rate")
 	}
-	_, _ = db2.Get(id2)
+	_, _ = db2.GetById(id2)
 
 	if hr := db2.Cache.getHitRate(); hr < 50 || hr > 50 {
 		log.Infof("Cache hit rate %f", hr)
 		t.Error("wrong hit rate")
 	}
-	_, _ = db1.Get(id2)
+	_, _ = db1.GetById(id2)
 
 	if hr := db1.Cache.getHitRate(); hr != 100 {
 		log.Infof("Cache hit rate %f", hr)
@@ -133,21 +134,21 @@ func TestCache(t *testing.T) {
 	// so the expected hitrate is 50%
 	var numElements = 2 * CacheMaxItems
 
-	reference := make(map[DbItemID]string)
+	reference := make(map[ID]string)
 	for n := 0; n < numElements; n++ {
 		d = NewBenchmarkData(n)
-		db.Append(d)
-		reference[DbItemID(n)] = d.Str
+		db.Append(fmt.Sprintf("Item%d", n), d)
+		reference[ID(n)] = d.Str
 	}
 	db.Close()
 
 	db, _ = Connect[benchmarkData]("benchmark")
 	for n := 0; n < numElements; n++ {
-		rndNo := DbItemID(rand.Intn(numElements))
-		if d, err = db.Get(rndNo); err != nil {
+		rndNo := ID(rand.Intn(numElements))
+		if d, err = db.GetById(rndNo); err != nil {
 			t.Error("get failed")
 		}
-		if d.Str != reference[DbItemID(rndNo)] {
+		if d.Str != reference[ID(rndNo)] {
 			t.Error("values dont match", rndNo)
 		}
 	}
@@ -196,19 +197,19 @@ func TestDeleteLogic(t *testing.T) {
 	db, _ = Connect[benchmarkData]("benchmark")
 	for n := 0; n < N; n++ {
 		d = NewBenchmarkData(n)
-		db.Append(d)
+		db.Append(fmt.Sprintf("Item%d", n), d)
 	}
 	for n := 0; n < N; n++ {
-		err = db.Delete(DbItemID(seq[n]))
+		err = db.DeleteById(ID(seq[n]))
 		if err != nil {
 			t.Error("should be able to delete")
 		}
 	}
-	err = db.Delete(0)
+	err = db.DeleteById(0)
 	if err == nil {
 		t.Error("should not be able to delete")
 	}
-	l := len(db.deleteFlag)
+	l := len(db.markForDelete)
 	if l != N {
 		t.Error("there should be ", N, " deleted")
 	}
@@ -229,18 +230,18 @@ func BenchmarkCache(b *testing.B) {
 
 	var numElements = int(CacheMaxItems * 2)
 
-	reference := make(map[DbItemID]string)
+	reference := make(map[ID]string)
 	for n := 0; n < numElements; n++ {
 		d = NewBenchmarkData(n)
-		db.Append(d)
-		reference[DbItemID(n)] = d.Str
+		db.Append(fmt.Sprintf("Item%d", n), d)
+		reference[ID(n)] = d.Str
 	}
 	db.Close()
 
 	db, _ = Connect[benchmarkData]("benchmark")
 	for n := 0; n < b.N; n++ {
-		rndNo := DbItemID(rand.Intn(numElements))
-		if _, err = db.Get(rndNo); err != nil {
+		rndNo := ID(rand.Intn(numElements))
+		if _, err = db.GetById(rndNo); err != nil {
 			b.Error("get failed")
 		}
 	}
