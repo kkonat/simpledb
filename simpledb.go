@@ -31,7 +31,7 @@ func init() {
 
 type ID uint32
 type Offsets map[ID]int64
-type KeyHashes map[uint32]ID
+type KeyHashes map[uint32][]ID
 type DeleteFlags map[ID]struct{}
 
 type SimpleDb[T any] struct {
@@ -49,15 +49,7 @@ type SimpleDb[T any] struct {
 	keyMap        KeyHashes
 }
 
-type Item[T any] struct {
-	ID       ID
-	LastUsed uint64
-	KeyHash  uint32
-	Key      string
-	Value    *T
-}
-
-func Connect[T any](filename string) (db *SimpleDb[T], err error) {
+func Open[T any](filename string) (db *SimpleDb[T], err error) {
 
 	dbDataFile := filepath.Clean(filename)
 	dir, file := filepath.Split(dbDataFile)
@@ -124,7 +116,7 @@ const (
 )
 
 // Appends a key, value pair to the database, returns added item id, and error, if any
-func (db *SimpleDb[T]) Append(key string, value *T) (id ID, err error) {
+func (db *SimpleDb[T]) Append(key []byte, value *T) (id ID, err error) {
 	var mtx sync.Mutex
 	mtx.Lock()
 	defer mtx.Unlock()
@@ -140,7 +132,7 @@ func (db *SimpleDb[T]) Append(key string, value *T) (id ID, err error) {
 	//prepare item header values
 	id = db.genNewId()
 	timestamp := uint64(time.Now().Unix())
-	hash := calcHash([]byte(key))
+	hash := getHash([]byte(key))
 
 	// put together the header
 	header := binary.LittleEndian.AppendUint32([]byte{}, uint32(id))      // unique item id
@@ -165,7 +157,7 @@ func (db *SimpleDb[T]) Append(key string, value *T) (id ID, err error) {
 	db.currentOffset += int64(offset)     // update current offset
 	db.capacity++                         // update db capacity
 	// Cache the newly added item
-	db.Cache.addItem(&Item[T]{
+	db.Cache.addItem(&CacheItem[T]{
 		ID:       id,
 		LastUsed: timestamp,
 		Key:      key,
@@ -177,7 +169,7 @@ func (db *SimpleDb[T]) Append(key string, value *T) (id ID, err error) {
 }
 
 // Gets one Item from the database by Id
-func (db *SimpleDb[T]) GetById(id ID) (rd *T, err error) {
+func (db *SimpleDb[T]) GetById(id ID) (key []byte, val *T, err error) {
 	var mtx sync.Mutex
 	mtx.Lock()
 	defer mtx.Unlock()
@@ -185,56 +177,72 @@ func (db *SimpleDb[T]) GetById(id ID) (rd *T, err error) {
 	// check if an object with the requested id has ever been created
 	seek, ok := db.itemOffsets[id] // if it is in offsets map
 	if !ok {
-		return nil, errors.New("item not found in the database")
+		return nil, nil, errors.New("item not found in the database")
 	}
 
 	// check if it is cached
 	if object, ok := db.Cache.getItem(id); ok {
 		if _, ok := db.markForDelete[id]; !ok { // if in cache and not deleted
-			return object.Value, nil
+			return object.Key, object.Value, nil
 		}
 	}
 
 	// check if it has not been marked for deletion
 	if _, ok := db.markForDelete[id]; ok {
-		return nil, errors.New("item not found in the database")
+		return nil, nil, errors.New("item not found in the database")
 	}
 
 	// otherwise, read it from the database file
 	db.fileHandle.Seek(seek, io.SeekStart)             // move to the right position in the file
 	buff := make([]byte, OffsL)                        // first read only the the item length, i.e. the offset
 	if _, err = db.fileHandle.Read(buff); err != nil { // read OffsL bytes
-		return nil, err
+		return nil, nil, err
 	}
 	offset := binary.LittleEndian.Uint32(buff)
 	buff = make([]byte, offset)            // resize the buffer to hold the whole item
 	db.fileHandle.Seek(seek, io.SeekStart) // re-read the whole item (to make slice constants meaningful)
 	if _, err = db.fileHandle.Read(buff); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	// decode data
 	itemId := binary.LittleEndian.Uint16(buff[IDPos : IDPos+IDL])
 	timestamp := binary.LittleEndian.Uint64(buff[TimePos : TimePos+TimeL])
 	keyHash := binary.LittleEndian.Uint32(buff[KeyHashPos : KeyHashPos+KeyHashL])
 	keylen := binary.LittleEndian.Uint16(buff[KeyLenPos : KeyLenPos+KeyLenL])
-	key := string(buff[KeyPos : KeyPos+keylen])
+	key = buff[KeyPos : KeyPos+keylen]
 
 	// unmarshall payload
-	newData := new(T)
-	if err := json.Unmarshal(buff[KeyPos+keylen:], newData); err != nil {
-		return nil, fmt.Errorf("error unmarshalling: %w", err)
+	val = new(T)
+	if err := json.Unmarshal(buff[KeyPos+keylen:], val); err != nil {
+		return nil, nil, fmt.Errorf("error unmarshalling: %w", err)
 	}
 
 	// create db Item for caching
-	db.Cache.addItem(&Item[T]{
+	db.Cache.addItem(&CacheItem[T]{
 		ID:       ID(itemId),
 		LastUsed: timestamp,
 		KeyHash:  keyHash,
 		Key:      key,
-		Value:    newData,
+		Value:    val,
 	})
 
-	return newData, err
+	return key, val, err
+}
+
+func (db *SimpleDb[T]) GetByKey(aKey []byte) (val *T, err error) {
+	keyHash := getHash([]byte(aKey))
+	ids, ok := db.keyMap[keyHash]
+	if !ok {
+		return nil, errors.New("key not found")
+	}
+	var key []byte
+	for _, id := range ids {
+		key, val, err = db.GetById(id)
+		if err == nil && keysEqual(key, aKey) {
+			return val, nil
+		}
+	}
+	return nil, errors.New("key not found")
 }
 
 // Marks item with a given Id for deletion
@@ -286,7 +294,7 @@ func (db *SimpleDb[T]) rebuildOffsets() (err error) {
 
 	db.itemOffsets = make(Offsets)
 
-	buff := make([]byte, OffsL+IDL+TimeL+KeyHashL+KeyLenL) // only this data is needed, fixed length
+	buff := make([]byte, OffsL+IDL+TimeL+KeyHashL /*+KeyLenL*/) // only this data is needed, fixed length
 loop:
 	for {
 		if _, err = db.fileHandle.Seek(curpos, 0); err != nil {
@@ -302,22 +310,12 @@ loop:
 		skip := binary.LittleEndian.Uint32(buff[OffsPos : OffsPos+OffsL])
 		id := ID(binary.LittleEndian.Uint32(buff[IDPos : IDPos+IDL]))
 		hash := binary.LittleEndian.Uint32(buff[KeyHashPos : KeyHashPos+KeyHashL])
-		keyLen := binary.LittleEndian.Uint16(buff[KeyLenPos : KeyLenPos+KeyLenL])
+		// keyLen := binary.LittleEndian.Uint16(buff[KeyLenPos : KeyLenPos+KeyLenL])
 
-		// extra sanity check, to see whether the db file is not corrupted
-		kbuff := make([]byte, keyLen)
-		if _, err = db.fileHandle.Read(kbuff); err != nil {
-			return err
-		}
-		readKeyHash := calcHash(kbuff)
-		if readKeyHash != hash { // key hash saved in db must be the same as the hash recomputed from key
-			panic("corrupted database file")
-		}
-
-		db.itemOffsets[ID(id)] = curpos // updat offsets map
-		db.keyMap[hash] = ID(id)        // update kayhashmap
-		curpos += int64(skip)           // update current position in the file
-		if id > lastId {                // keep track of the last id
+		db.itemOffsets[ID(id)] = curpos                   // updat offsets map
+		db.keyMap[hash] = append(db.keyMap[hash], ID(id)) // update kayhashmap
+		curpos += int64(skip)                             // update current position in the file
+		if id > lastId {                                  // keep track of the last id
 			lastId = id
 		}
 		count++
@@ -333,9 +331,21 @@ func openDbFile(path string) (file *os.File, err error) {
 	return
 }
 
+func keysEqual(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i, v := range a {
+		if v != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // calculates hash of a buffer - must be fast and relatively collission-safe
 // 32 bits for mostly human-readable key values is obviously an overkill
-func calcHash(data []byte) uint32 {
+func getHash(data []byte) uint32 {
 	return crc32.Checksum(data, crc32table)
 }
 

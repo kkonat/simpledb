@@ -9,7 +9,7 @@ import (
 )
 
 func TestNew(t *testing.T) {
-	d, err := Connect[Person]("testdb")
+	d, err := Open[Person]("testdb")
 	if err != nil {
 		t.Errorf("failed to create database: %v", err)
 	}
@@ -28,7 +28,7 @@ var testData []Person = []Person{
 }
 
 func TestKill(t *testing.T) {
-	db1, err := Connect[Person]("testdb")
+	db1, err := Open[Person]("testdb")
 	if err != nil {
 		t.Errorf("failed to create database: %v", err)
 	}
@@ -37,24 +37,24 @@ func TestKill(t *testing.T) {
 		t.Errorf("failed to kill database: %v", err)
 	}
 }
-func TestNewCloseOpen(t *testing.T) {
-	db1, _ := Connect[Person]("testdb")
+func TestBasicFunctionality(t *testing.T) {
+	db1, _ := Open[Person]("testdb")
 	Destroy(db1, "testdb")
 
 	var err error
-	db1, err = Connect[Person]("testdb")
+	db1, err = Open[Person]("testdb")
 	if err != nil {
 		t.Errorf("failed to create database: %v", err)
 	}
 
-	id1, err := db1.Append("Person1", &testData[0])
+	id1, err := db1.Append([]byte("Person1"), &testData[0])
 	if err != nil {
 		t.Errorf("Append fail")
 	}
 	if id1 != 0 {
 		t.Error("Bad id")
 	}
-	id2, err := db1.Append("Person2", &testData[1])
+	id2, err := db1.Append([]byte("Person2"), &testData[1])
 	if err != nil {
 		t.Errorf("Append fail")
 	}
@@ -63,7 +63,7 @@ func TestNewCloseOpen(t *testing.T) {
 	}
 	db1.Close()
 
-	db2, err := Connect[Person]("testdb")
+	db2, err := Open[Person]("testdb")
 	if err != nil {
 		t.Errorf("failed to open database: %v", err)
 	}
@@ -73,14 +73,19 @@ func TestNewCloseOpen(t *testing.T) {
 	if db1.capacity != db2.capacity {
 		t.Error("differenc counters")
 	}
-	pers, err := db2.GetById(id2)
+	_, _, err = db2.GetById(id2)
 	if err != nil {
 		t.Error("error getting item ", id2, err)
 	}
-	if pers.Age != testData[id2].Age {
+	pers, err := db2.GetByKey([]byte("Person1"))
+	if err != nil {
+		t.Error("error getting by key", err)
+
+	}
+	if pers.Age != testData[id1].Age {
 		t.Error("Wrong data")
 	}
-	_, err = db2.GetById(9999)
+	_, _, err = db2.GetById(9999)
 	if err == nil {
 		t.Error("got non existing object")
 	}
@@ -89,13 +94,13 @@ func TestNewCloseOpen(t *testing.T) {
 		log.Infof("Cache hit rate %.2f", hr)
 		t.Error("wrong hit rate")
 	}
-	_, _ = db2.GetById(id2)
+	_, _, _ = db2.GetById(id2)
 
-	if hr := db2.Cache.getHitRate(); hr < 50 || hr > 50 {
+	if hr := db2.Cache.getHitRate(); hr < 33.32 || hr > 33.34 {
 		log.Infof("Cache hit rate %f", hr)
 		t.Error("wrong hit rate")
 	}
-	_, _ = db1.GetById(id2)
+	_, _, _ = db1.GetById(id2)
 
 	if hr := db1.Cache.getHitRate(); hr != 100 {
 		log.Infof("Cache hit rate %f", hr)
@@ -126,9 +131,9 @@ func TestCache(t *testing.T) {
 		err error
 	)
 
-	db, _ := Connect[benchmarkData]("benchmark")
+	db, _ := Open[benchmarkData]("benchmark")
 	Destroy(db, "benchmark")
-	db, _ = Connect[benchmarkData]("benchmark")
+	db, _ = Open[benchmarkData]("benchmark")
 
 	// gen 2 x times the cache capacity
 	// so the expected hitrate is 50%
@@ -137,15 +142,15 @@ func TestCache(t *testing.T) {
 	reference := make(map[ID]string)
 	for n := 0; n < numElements; n++ {
 		d = NewBenchmarkData(n)
-		db.Append(fmt.Sprintf("Item%d", n), d)
+		db.Append([]byte(fmt.Sprintf("Item%d", n)), d)
 		reference[ID(n)] = d.Str
 	}
 	db.Close()
 
-	db, _ = Connect[benchmarkData]("benchmark")
+	db, _ = Open[benchmarkData]("benchmark")
 	for n := 0; n < numElements; n++ {
 		rndNo := ID(rand.Intn(numElements))
-		if d, err = db.GetById(rndNo); err != nil {
+		if _, d, err = db.GetById(rndNo); err != nil {
 			t.Error("get failed")
 		}
 		if d.Str != reference[ID(rndNo)] {
@@ -192,12 +197,12 @@ func TestDeleteLogic(t *testing.T) {
 	const N = CacheMaxItems * 2
 	log.Info("Testing N = ", N)
 	seq := genRandomSequence(N)
-	db, _ := Connect[benchmarkData]("benchmark")
+	db, _ := Open[benchmarkData]("benchmark")
 	Destroy(db, "benchmark")
-	db, _ = Connect[benchmarkData]("benchmark")
+	db, _ = Open[benchmarkData]("benchmark")
 	for n := 0; n < N; n++ {
 		d = NewBenchmarkData(n)
-		db.Append(fmt.Sprintf("Item%d", n), d)
+		db.Append([]byte(fmt.Sprintf("Item%d", n)), d)
 	}
 	for n := 0; n < N; n++ {
 		err = db.DeleteById(ID(seq[n]))
@@ -224,24 +229,24 @@ func BenchmarkCache(b *testing.B) {
 		err error
 	)
 
-	db, _ := Connect[benchmarkData]("benchmark")
+	db, _ := Open[benchmarkData]("benchmark")
 	Destroy(db, "benchmark")
-	db, _ = Connect[benchmarkData]("benchmark")
+	db, _ = Open[benchmarkData]("benchmark")
 
 	var numElements = int(CacheMaxItems * 2)
 
 	reference := make(map[ID]string)
 	for n := 0; n < numElements; n++ {
 		d = NewBenchmarkData(n)
-		db.Append(fmt.Sprintf("Item%d", n), d)
+		db.Append([]byte(fmt.Sprintf("Item%d", n)), d)
 		reference[ID(n)] = d.Str
 	}
 	db.Close()
 
-	db, _ = Connect[benchmarkData]("benchmark")
+	db, _ = Open[benchmarkData]("benchmark")
 	for n := 0; n < b.N; n++ {
 		rndNo := ID(rand.Intn(numElements))
-		if _, err = db.GetById(rndNo); err != nil {
+		if _, _, err = db.GetById(rndNo); err != nil {
 			b.Error("get failed")
 		}
 	}
