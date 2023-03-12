@@ -2,7 +2,6 @@ package simpledb
 
 import (
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/crc32"
@@ -14,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/near/borsh-go"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -45,7 +45,7 @@ type SimpleDb[T any] struct {
 	lastId        ID
 
 	markForDelete DeleteFlags
-	itemOffsets   Offsets
+	blockOffsets  Offsets
 	keyMap        KeyHashes
 }
 
@@ -60,7 +60,7 @@ func Open[T any](filename string) (db *SimpleDb[T], err error) {
 	}
 
 	db = &SimpleDb[T]{}
-	// initialize cache
+
 	db.Cache.Initialize()
 	db.keyMap = make(KeyHashes, 0)
 	db.markForDelete = make(DeleteFlags)
@@ -76,22 +76,21 @@ func Open[T any](filename string) (db *SimpleDb[T], err error) {
 		}
 	} else {
 		// if not, initialize empty db
-		db.itemOffsets = make(Offsets)
+		db.blockOffsets = make(Offsets)
 		db.fileHandle, err = openDbFile(dataFilePath)
 	}
 
 	return
 }
 
-func Destroy[T any](db *SimpleDb[T], dbName string) (err error) {
+func Close[T any](db *SimpleDb[T], dbName string) (err error) {
 	_, file := filepath.Split(db.FilePath)
 	if name := strings.Split(file, ".")[0]; name != dbName {
 		return errors.New("invalid db name provided")
 	}
 	db.fileHandle.Close()
 
-	db.Cache.data = nil
-	db.queue = nil
+	db.Cache.Cleanup()
 	if err = os.Remove(db.FilePath); err != nil {
 		return fmt.Errorf("error removing datafile: %w", err)
 	}
@@ -99,9 +98,9 @@ func Destroy[T any](db *SimpleDb[T], dbName string) (err error) {
 	return
 }
 
-// Data base item binary data structure
+// Database block binary data structure
 const (
-	OffsPos    = 0                     // Offset, this is the offset to the next item in the file, i.e. this item lenght
+	OffsPos    = 0                     // Offset, this is the offset to the next block in the file, i.e. this block lenght
 	OffsL      = 4                     // 4 bytes
 	IDPos      = OffsPos + OffsL       // Objec ID
 	IDL        = 4                     // 4 bytes
@@ -115,47 +114,46 @@ const (
 	//                                    payload of variable leghts, goes after the key
 )
 
-// Appends a key, value pair to the database, returns added item id, and error, if any
+// Appends a key, value pair to the database, returns added block id, and error, if any
 func (db *SimpleDb[T]) Append(key []byte, value *T) (id ID, err error) {
 	var mtx sync.Mutex
 	mtx.Lock()
 	defer mtx.Unlock()
 
-	var payload []byte // prepare payload - TODO: replace json with binary encoder
-	if payload, err = json.Marshal(value); err != nil {
-		return 0, fmt.Errorf("error marshalling: %w", err)
+	var payload []byte
+	if payload, err = borsh.Serialize(value); err != nil {
+		return 0, fmt.Errorf("error serializing: %w", err)
 	}
 	if len(payload) > math.MaxUint32 { // payload must not be too large, ha ha
 		panic("payload too large")
 	}
-
-	//prepare item header values
+	//prepare block header values
 	id = db.genNewId()
 	timestamp := uint64(time.Now().Unix())
 	hash := getHash([]byte(key))
 
 	// put together the header
-	header := binary.LittleEndian.AppendUint32([]byte{}, uint32(id))      // unique item id
+	header := binary.LittleEndian.AppendUint32([]byte{}, uint32(id))      // unique block id
 	header = binary.LittleEndian.AppendUint64(header, timestamp)          // created timestamp
 	keyData := binary.LittleEndian.AppendUint32([]byte{}, hash)           // key hash
 	keyData = binary.LittleEndian.AppendUint16(keyData, uint16(len(key))) // key length
 	keyData = append(keyData, []byte(key)...)                             // key value
 	header = append(header, keyData...)                                   //
 
-	offset := len(header) + len(payload) + 4 // comppute dat item size plus 4 for the offset itself
+	offset := len(header) + len(payload) + 4 // comppute dat block size plus 4 for the offset itself
 
-	item := binary.LittleEndian.AppendUint32([]byte{}, uint32(offset)) // put offset in front
-	item = append(item, header...)                                     // then goes the header
-	item = append(item, payload...)                                    // and then the payload
+	block := binary.LittleEndian.AppendUint32([]byte{}, uint32(offset)) // put offset in front
+	block = append(block, header...)                                    // then goes the header
+	block = append(block, payload...)                                   // and then the payload
 
 	// write everything at once (pretending to be atomic)
-	if bytesWritten, err := db.fileHandle.Write(item); err != nil || bytesWritten != offset {
+	if bytesWritten, err := db.fileHandle.Write(block); err != nil || bytesWritten != offset {
 		return 0, fmt.Errorf("error writing datafile: %w", err)
 	}
 
-	db.itemOffsets[id] = db.currentOffset // add to offsets map
-	db.currentOffset += int64(offset)     // update current offset
-	db.capacity++                         // update db capacity
+	db.blockOffsets[id] = db.currentOffset // add to offsets map
+	db.currentOffset += int64(offset)      // update current offset
+	db.capacity++                          // update db capacity
 	// Cache the newly added item
 	db.Cache.addItem(&CacheItem[T]{
 		ID:       id,
@@ -168,14 +166,14 @@ func (db *SimpleDb[T]) Append(key []byte, value *T) (id ID, err error) {
 	return id, nil
 }
 
-// Gets one Item from the database by Id
+// Gets one block from the database by Id
 func (db *SimpleDb[T]) GetById(id ID) (key []byte, val *T, err error) {
 	var mtx sync.Mutex
 	mtx.Lock()
 	defer mtx.Unlock()
 
 	// check if an object with the requested id has ever been created
-	seek, ok := db.itemOffsets[id] // if it is in offsets map
+	seek, ok := db.blockOffsets[id] // if it is in offsets map
 	if !ok {
 		return nil, nil, errors.New("item not found in the database")
 	}
@@ -199,8 +197,8 @@ func (db *SimpleDb[T]) GetById(id ID) (key []byte, val *T, err error) {
 		return nil, nil, err
 	}
 	offset := binary.LittleEndian.Uint32(buff)
-	buff = make([]byte, offset)            // resize the buffer to hold the whole item
-	db.fileHandle.Seek(seek, io.SeekStart) // re-read the whole item (to make slice constants meaningful)
+	buff = make([]byte, offset)            // resize the buffer to hold the whole block
+	db.fileHandle.Seek(seek, io.SeekStart) // re-read the whole block (to make slice constants meaningful)
 	if _, err = db.fileHandle.Read(buff); err != nil {
 		return nil, nil, err
 	}
@@ -213,8 +211,8 @@ func (db *SimpleDb[T]) GetById(id ID) (key []byte, val *T, err error) {
 
 	// unmarshall payload
 	val = new(T)
-	if err := json.Unmarshal(buff[KeyPos+keylen:], val); err != nil {
-		return nil, nil, fmt.Errorf("error unmarshalling: %w", err)
+	if err := borsh.Deserialize(&val, buff[KeyPos+keylen:]); err != nil {
+		return nil, nil, fmt.Errorf("error deserializing: %w", err)
 	}
 
 	// create db Item for caching
@@ -248,7 +246,7 @@ func (db *SimpleDb[T]) GetByKey(aKey []byte) (val *T, err error) {
 // Marks item with a given Id for deletion
 func (db *SimpleDb[T]) DeleteById(id ID) error {
 	// check if it ever was created
-	if _, ok := db.itemOffsets[id]; !ok {
+	if _, ok := db.blockOffsets[id]; !ok {
 		return errors.New("item not found in the database")
 	}
 
@@ -292,7 +290,7 @@ func (db *SimpleDb[T]) rebuildOffsets() (err error) {
 		count  uint64
 	)
 
-	db.itemOffsets = make(Offsets)
+	db.blockOffsets = make(Offsets)
 
 	buff := make([]byte, OffsL+IDL+TimeL+KeyHashL /*+KeyLenL*/) // only this data is needed, fixed length
 loop:
@@ -312,7 +310,7 @@ loop:
 		hash := binary.LittleEndian.Uint32(buff[KeyHashPos : KeyHashPos+KeyHashL])
 		// keyLen := binary.LittleEndian.Uint16(buff[KeyLenPos : KeyLenPos+KeyLenL])
 
-		db.itemOffsets[ID(id)] = curpos                   // updat offsets map
+		db.blockOffsets[ID(id)] = curpos                  // updat offsets map
 		db.keyMap[hash] = append(db.keyMap[hash], ID(id)) // update kayhashmap
 		curpos += int64(skip)                             // update current position in the file
 		if id > lastId {                                  // keep track of the last id
@@ -341,6 +339,17 @@ func keysEqual(a, b []byte) bool {
 		}
 	}
 	return true
+}
+
+func printBuff(bytes []byte) {
+	for _, b := range bytes {
+		if b >= ' ' && b <= '~' {
+			fmt.Printf("%c", b)
+		} else {
+			fmt.Printf("%02x ", b)
+		}
+	}
+	fmt.Println("")
 }
 
 // calculates hash of a buffer - must be fast and relatively collission-safe

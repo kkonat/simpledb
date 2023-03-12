@@ -32,14 +32,14 @@ func TestKill(t *testing.T) {
 	if err != nil {
 		t.Errorf("failed to create database: %v", err)
 	}
-	err = Destroy(db1, "testdb")
+	err = Close(db1, "testdb")
 	if err != nil {
 		t.Errorf("failed to kill database: %v", err)
 	}
 }
 func TestBasicFunctionality(t *testing.T) {
 	db1, _ := Open[Person]("testdb")
-	Destroy(db1, "testdb")
+	Close(db1, "testdb")
 
 	var err error
 	db1, err = Open[Person]("testdb")
@@ -90,19 +90,19 @@ func TestBasicFunctionality(t *testing.T) {
 		t.Error("got non existing object")
 	}
 
-	if hr := db2.Cache.getHitRate(); hr != 0 {
+	if hr := db2.Cache.GetHitRate(); hr != 0 {
 		log.Infof("Cache hit rate %.2f", hr)
 		t.Error("wrong hit rate")
 	}
 	_, _, _ = db2.GetById(id2)
 
-	if hr := db2.Cache.getHitRate(); hr < 33.32 || hr > 33.34 {
+	if hr := db2.Cache.GetHitRate(); hr < 33.32 || hr > 33.34 {
 		log.Infof("Cache hit rate %f", hr)
 		t.Error("wrong hit rate")
 	}
 	_, _, _ = db1.GetById(id2)
 
-	if hr := db1.Cache.getHitRate(); hr != 100 {
+	if hr := db1.Cache.GetHitRate(); hr != 100 {
 		log.Infof("Cache hit rate %f", hr)
 		t.Error("wrong hit rate")
 	}
@@ -132,7 +132,7 @@ func TestCache(t *testing.T) {
 	)
 
 	db, _ := Open[benchmarkData]("benchmark")
-	Destroy(db, "benchmark")
+	Close(db, "benchmark")
 	db, _ = Open[benchmarkData]("benchmark")
 
 	// gen 2 x times the cache capacity
@@ -157,7 +157,7 @@ func TestCache(t *testing.T) {
 			t.Error("values dont match", rndNo)
 		}
 	}
-	log.Info("Cache Hit rate: ", db.getHitRate(), " %")
+	log.Info("Cache Hit rate: ", db.GetHitRate(), " %")
 }
 
 func genRandomSequence(N int) []int {
@@ -198,7 +198,7 @@ func TestDeleteLogic(t *testing.T) {
 	log.Info("Testing N = ", N)
 	seq := genRandomSequence(N)
 	db, _ := Open[benchmarkData]("benchmark")
-	Destroy(db, "benchmark")
+	Close(db, "benchmark")
 	db, _ = Open[benchmarkData]("benchmark")
 	for n := 0; n < N; n++ {
 		d = NewBenchmarkData(n)
@@ -230,7 +230,7 @@ func BenchmarkCache(b *testing.B) {
 	)
 
 	db, _ := Open[benchmarkData]("benchmark")
-	Destroy(db, "benchmark")
+	Close(db, "benchmark")
 	db, _ = Open[benchmarkData]("benchmark")
 
 	var numElements = int(CacheMaxItems * 2)
@@ -250,5 +250,5 @@ func BenchmarkCache(b *testing.B) {
 			b.Error("get failed")
 		}
 	}
-	log.Info("-> ", b.N, " iterations. Cache Hit rate: ", db.getHitRate(), " %")
+	log.Info("-> ", b.N, " iterations. Cache Hit rate: ", db.GetHitRate(), " %")
 }

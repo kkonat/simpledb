@@ -29,6 +29,16 @@ func (c *Cache[T]) Initialize() {
 		panic("reinitializing cache")
 	}
 }
+func (c *Cache[T]) Cleanup() {
+
+	// mark unused for GC
+	for i := range c.data {
+		c.data[i] = nil
+	}
+	c.data = nil
+	c.queue = nil
+}
+
 func (c *Cache[T]) addItem(item *CacheItem[T]) {
 	if len(c.queue) == CacheMaxItems {
 		delete(c.data, c.queue[0])
@@ -60,7 +70,7 @@ func (c *Cache[T]) removeItem(id ID) (ok bool) {
 	return
 }
 
-func (m Cache[T]) getHitRate() float64 {
+func (m Cache[T]) GetHitRate() float64 {
 	if m.requests > 0 {
 		return float64(m.hits) / float64(m.requests) * 100
 	} else {

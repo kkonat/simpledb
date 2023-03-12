@@ -6,20 +6,20 @@ A simple, sequential flat-file key, value database,
 intended for non-demanding in-app data storage
 with memory cache
 
-Currently uses json encoding for values. I tried out gob encoding to make the data file fully, binary,
-but on the first attempt it seemed an overkill for such a simple database.
-First, probably due to generics support I was unable to force gob enconding not to encode field names (data structure) in each record. I will try it again later, but for now, I will be focusing on core functionality
-In my recent implementation, json performed better:
-7653 ns/op 404 B/op 11 allocs/op
-compared to gob with:
-29126 ns/op 7356 B/op 193 allocs/op
+Currently uses borsh (Binary Object Representation Serializer for Hashing) for binary encoding of values. I tried out gob encoding, but due to the nature of sequential writes to the database, it would require some heavy wrangling to get rid of type definition
+data included in the binary form
 
-So, currently json is almost 4x faster and 18x less memory intensive, but I will work on that
+Here are actual performnce results of various encoding types:
+| encoding | performance |
+| --- | -- |
+| borsh | 4094 ns/op 216 B/op 12 allocs/op |
+| json | 7653 ns/op 404 B/op 11 allocs/op |
+| gob | 29126 ns/op 7356 B/op 193 allocs/op |
 
-Each database item in the file hast the following structure:
+Each database block in the file hast the following structure:
 
 ```
-- Offset    4 bytes         - Offset to the next item in the file (i.e. item lenght)
+- Offset    4 bytes         - Offset to the next block in the file (i.e. block lenght)
 - ID        4 bytes         - Object ID
 - timestamp 8 bytes         - timestamp
 - KeyHash   4 bytes         - hash of the key
@@ -39,15 +39,15 @@ The Get operation works as follows:
 - parsing item data and payload
 
 The memory cache improves data access speeds up to 150x times (on my SSD):
-Benchmark results were:
 
-| Cache size                                      | benchmark result                 |
+Benchmark results for **borsh** encoding:
+| Cache size | benchmark result |
 | ----------------------------------------------- | :------------------------------- |
-| No cache                                        | 8195 ns/op 433 B/op 12 allocs/op |
-| ~10% hit rate (small cache)                     | 7653 ns/op 404 B/op 11 allocs/op |
-| ~50% hit rate (cache half the dataset size )    | 4323 ns/op 219 B/op 6 allocs/op  |
-| ~75% hit rate (cache half the dataset size )    | 2166 ns/op 109 B/op 3 allocs/op  |
-| 100% hit rate (cache the same size the dataset) | 55 ns/op 0 B/op 0 allocs/op      |
+| No cache | 7890 ns/op 416 B/op 22 allocs/o |
+| ~10% hit rate (small cache) | 7469 ns/op 391 B/op 20 allocs/op |
+| ~50% hit rate (cache half the dataset size ) | 4080 ns/op 216 B/op 12 allocs/op |
+| ~75% hit rate (cache half the dataset size ) | 2085 ns/op 115 B/op 6 allocs/op |
+| 100% hit rate (cache the same size the dataset) | 124.2 ns/op 16 B/op 2 allocs/op |
 
 The following operations are supported as of now:
 
