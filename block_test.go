@@ -14,14 +14,14 @@ func TestBlock(t *testing.T) {
 
 	data := block1.getBytes()
 
-	printBuff(data)
+	printBytes(data)
 
 	block2 := &block{}
 	block2.setBytes(data)
 
-	printBuff(block2.getBytes())
+	printBytes(block2.getBytes())
 
-	if block2.ID != block1.ID ||
+	if block2.Id != block1.Id ||
 		block2.Timestamp != block1.Timestamp ||
 		block2.KeyHash != block1.KeyHash ||
 		string(block2.key) != string(block1.key) ||

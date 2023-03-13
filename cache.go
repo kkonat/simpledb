@@ -2,14 +2,14 @@ package simpledb
 
 const CacheMaxItems = 100
 
-type Cache[T any] struct {
-	data     map[ID]*CacheItem[T]
+type cache[T any] struct {
+	data     map[ID]*cacheItem[T]
 	queue    []ID
 	requests uint64
 	hits     uint64
 }
 
-type CacheItem[T any] struct {
+type cacheItem[T any] struct {
 	ID       ID
 	LastUsed uint64
 	KeyHash  uint32
@@ -17,9 +17,9 @@ type CacheItem[T any] struct {
 	Value    *T
 }
 
-func (c *Cache[T]) Initialize() {
+func (c *cache[T]) initialize() {
 	if c.data == nil {
-		c.data = make(map[ID]*CacheItem[T])
+		c.data = make(map[ID]*cacheItem[T])
 	} else {
 		panic("reinitializing cache")
 	}
@@ -29,7 +29,7 @@ func (c *Cache[T]) Initialize() {
 		panic("reinitializing cache")
 	}
 }
-func (c *Cache[T]) Cleanup() {
+func (c *cache[T]) cleanup() {
 
 	// mark unused for GC
 	for i := range c.data {
@@ -39,7 +39,7 @@ func (c *Cache[T]) Cleanup() {
 	c.queue = nil
 }
 
-func (c *Cache[T]) addItem(item *CacheItem[T]) {
+func (c *cache[T]) addItem(item *cacheItem[T]) {
 	if len(c.queue) == CacheMaxItems {
 		delete(c.data, c.queue[0])
 		c.queue = c.queue[1:]
@@ -48,7 +48,7 @@ func (c *Cache[T]) addItem(item *CacheItem[T]) {
 	c.queue = append(c.queue, item.ID)
 }
 
-func (c *Cache[T]) getItem(id ID) (item *CacheItem[T], ok bool) {
+func (c *cache[T]) getItem(id ID) (item *cacheItem[T], ok bool) {
 	c.requests++
 	if item, ok = c.data[id]; ok {
 		c.hits++
@@ -56,7 +56,7 @@ func (c *Cache[T]) getItem(id ID) (item *CacheItem[T], ok bool) {
 	return
 }
 
-func (c *Cache[T]) removeItem(id ID) (ok bool) {
+func (c *cache[T]) removeItem(id ID) (ok bool) {
 	delete(c.data, id)
 
 	//remove id from queue
@@ -70,7 +70,7 @@ func (c *Cache[T]) removeItem(id ID) (ok bool) {
 	return
 }
 
-func (m Cache[T]) GetHitRate() float64 {
+func (m cache[T]) GetHitRate() float64 {
 	if m.requests > 0 {
 		return float64(m.hits) / float64(m.requests) * 100
 	} else {

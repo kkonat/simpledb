@@ -30,9 +30,9 @@ func init() {
 }
 
 type ID uint32
-type Offsets map[ID]int64
-type KeyHashes map[uint32][]ID
-type DeleteFlags map[ID]struct{}
+type offsets map[ID]int64
+type keyHashes map[uint32][]ID
+type deleteFlags map[ID]struct{}
 
 type NotFoundError struct {
 	id  ID
@@ -44,18 +44,18 @@ func (r *NotFoundError) Error() string {
 }
 
 type SimpleDb[T any] struct {
-	FilePath   string
+	filePath   string
 	fileHandle *os.File
 
-	Cache[T]
+	cache[T]
 
 	capacity      uint64
 	currentOffset int64
 	lastId        ID
 
-	markForDelete DeleteFlags
-	blockOffsets  Offsets
-	keyMap        KeyHashes
+	markedForDelete deleteFlags
+	blockOffsets    offsets
+	keyMap          keyHashes
 }
 
 func Open[T any](filename string) (db *SimpleDb[T], err error) {
@@ -70,10 +70,10 @@ func Open[T any](filename string) (db *SimpleDb[T], err error) {
 
 	db = &SimpleDb[T]{}
 
-	db.Cache.initialize()
-	db.keyMap = make(KeyHashes, 0)
-	db.markForDelete = make(DeleteFlags)
-	db.FilePath = dataFilePath
+	db.cache.initialize()
+	db.keyMap = make(keyHashes, 0)
+	db.markedForDelete = make(deleteFlags)
+	db.filePath = dataFilePath
 
 	if _, err = os.Stat(dataFilePath); err == nil {
 		// if db file exists
@@ -85,21 +85,22 @@ func Open[T any](filename string) (db *SimpleDb[T], err error) {
 		}
 	} else {
 		// if not, initialize empty db
-		db.blockOffsets = make(Offsets)
+		db.blockOffsets = make(offsets)
 		db.fileHandle, err = openFile(dataFilePath)
 	}
 
 	return
 }
 
+// Closes and removes the database file from disk, requires db filename to be provided, for safety
 func Destroy[T any](db *SimpleDb[T], dbName string) (err error) {
-	_, file := filepath.Split(db.FilePath)
+	_, file := filepath.Split(db.filePath)
 	if name := strings.Split(file, ".")[0]; name != dbName {
 		return errors.New("invalid db name provided")
 	}
 	db.fileHandle.Close()
-	db.Cache.cleanup()
-	if err = os.Remove(db.FilePath); err != nil {
+	db.cache.cleanup()
+	if err = os.Remove(db.filePath); err != nil {
 		return fmt.Errorf("error removing datafile: %w", err)
 	}
 	db = nil
@@ -125,17 +126,17 @@ func (db *SimpleDb[T]) Append(key []byte, value *T) (id ID, err error) {
 	block := NewBlock(id, timestamp, key, payload) // and then the payload
 
 	// write everything at once (pretending to be atomic)
-	if bytesWritten, err := db.fileHandle.Write(block.getBytes()); err != nil || uint32(bytesWritten) != block.Offset {
+	if bytesWritten, err := db.fileHandle.Write(block.getBytes()); err != nil || uint32(bytesWritten) != block.Length {
 		return 0, fmt.Errorf("error writing datafile: %w", err)
 	}
 
 	db.blockOffsets[id] = db.currentOffset  // add to offsets map
-	db.currentOffset += int64(block.Offset) // update current offset
+	db.currentOffset += int64(block.Length) // update current offset
 	db.capacity++                           // update db capacity
 
 	// Cache the newly added item
-	db.Cache.addItem(&CacheItem[T]{
-		ID:       ID(block.ID),
+	db.cache.addItem(&cacheItem[T]{
+		ID:       ID(block.Id),
 		LastUsed: block.Timestamp,
 		Key:      key,
 		KeyHash:  block.KeyHash,
@@ -156,14 +157,14 @@ func (db *SimpleDb[T]) getById(id ID) (key []byte, val *T, err error) {
 	}
 
 	// check if it is cached
-	if object, ok := db.Cache.getItem(id); ok {
-		if _, ok := db.markForDelete[id]; !ok { // if in cache and not deleted
+	if object, ok := db.cache.getItem(id); ok {
+		if _, ok := db.markedForDelete[id]; !ok { // if in cache and not deleted
 			return object.Key, object.Value, nil
 		}
 	}
 
 	// check if it has not been marked for deletion
-	if _, ok := db.markForDelete[id]; ok {
+	if _, ok := db.markedForDelete[id]; ok {
 		return nil, nil, &NotFoundError{id: id}
 	}
 
@@ -190,8 +191,8 @@ func (db *SimpleDb[T]) getById(id ID) (key []byte, val *T, err error) {
 	}
 
 	// create db Item for caching
-	db.Cache.addItem(&CacheItem[T]{
-		ID:       ID(block.ID),
+	db.cache.addItem(&cacheItem[T]{
+		ID:       ID(block.Id),
 		LastUsed: block.Timestamp,
 		KeyHash:  block.KeyHash,
 		Key:      block.key,
@@ -228,7 +229,7 @@ func (db *SimpleDb[T]) Update(aKey []byte, value *T) (id ID, err error) { // TOD
 	for _, oldId := range ids {
 		key, _, err := db.getById(oldId)
 		if err == nil && keysEqual(aKey, key) {
-			db.deleteById(oldId)
+			db.deleteById(oldId, keyHash)
 			break
 		}
 	}
@@ -237,25 +238,30 @@ func (db *SimpleDb[T]) Update(aKey []byte, value *T) (id ID, err error) { // TOD
 }
 
 // Marks item with a given Id for deletion, internal function, may be used for testing/benchmarking
-func (db *SimpleDb[T]) deleteById(id ID) error {
+func (db *SimpleDb[T]) deleteById(id ID, keyHash uint32) error {
 
 	if !db.has(id) {
 		return &NotFoundError{id: id}
 	}
 
 	//  TODO: remove this check in future, permit multiple deletes, now convenient for testing
-	if _, ok := db.markForDelete[id]; ok {
+	if _, ok := db.markedForDelete[id]; ok {
 		return errors.New("item already deleted") // TODO: fail gracefully here instead of error
 	} else {
-		db.markForDelete[id] = struct{}{}
+		db.markedForDelete[id] = struct{}{}
 	}
 
-	if ci, ok := db.Cache.getItem(id); ok {
-		db.Cache.removeItem(ci.ID)
+	if ci, ok := db.cache.getItem(id); ok {
+		db.cache.removeItem(ci.ID)
 	} //else { TODO: debug this
-	// 	log.Info(fmt.Sprintf("why %d ", db.Cache.data[id].ID))
+	// 	log.Info(fmt.Sprintf("why %d ", db.cache.data[id].ID))
 	// }
-
+	ids := db.keyMap[keyHash]
+	for i, cid := range ids {
+		if cid == id {
+			db.keyMap[keyHash] = append(ids[:i], ids[i+1:]...)
+		}
+	}
 	db.capacity--
 	return nil
 }
@@ -272,7 +278,7 @@ func (db *SimpleDb[T]) Delete(aKey []byte) (err error) {
 	for _, id = range ids {
 		key, _, err = db.getById(id)
 		if err == nil && keysEqual(key, aKey) {
-			db.deleteById(id)
+			db.deleteById(id, keyHash)
 		}
 	}
 	return &NotFoundError{id: id}
@@ -288,7 +294,7 @@ func (db *SimpleDb[T]) Close() (err error) {
 	defer mtx.Unlock()
 
 	db.fileHandle.Close()
-	if len(db.markForDelete) == 0 {
+	if len(db.markedForDelete) == 0 {
 		return nil
 	}
 
@@ -297,25 +303,25 @@ func (db *SimpleDb[T]) Close() (err error) {
 	}
 
 	// substitute the temp file for the datbase file
-	if err := os.Remove(db.FilePath); err != nil {
+	if err := os.Remove(db.filePath); err != nil {
 		return err
 	}
 
 	if bytesWritten == 0 {
-		if err := os.Remove(db.FilePath); err != nil {
+		if err := os.Remove(tmpFile); err != nil {
 			return err
 		}
 		return nil
 	}
-	if err := os.Rename(tmpFile, db.FilePath); err != nil {
+	if err := os.Rename(tmpFile, db.filePath); err != nil {
 		return err
 	}
 
-	db.Cache.cleanup()
+	db.cache.cleanup()
 
 	// invalidate all internal structs
 	db.blockOffsets = nil
-	db.markForDelete = nil
+	db.markedForDelete = nil
 	for k := range db.keyMap {
 		delete(db.keyMap, k)
 	}
@@ -334,7 +340,7 @@ func (db *SimpleDb[T]) copyOmittingDeleted(tmpFile string) (bytesWritten uint64,
 	if err != nil {
 		return 0, err
 	}
-	src, err := openFile(db.FilePath)
+	src, err := openFile(db.filePath)
 	if err != nil {
 		return 0, err
 	}
@@ -345,13 +351,14 @@ loop:
 		}
 		if err = binary.Read(src, binary.LittleEndian, &header); err != nil {
 			if errors.Is(err, io.EOF) {
+				err = nil
 				break loop
 			} else {
 				return 0, err
 			}
 		}
-		if _, ok := db.markForDelete[ID(header.ID)]; !ok {
-			buff := make([]byte, header.Offset)
+		if _, ok := db.markedForDelete[ID(header.Id)]; !ok {
+			buff := make([]byte, header.Length)
 			if _, err = src.Seek(curpos, 0); err != nil {
 				return 0, err
 			}
@@ -363,7 +370,7 @@ loop:
 				return bytesWritten, err
 			}
 		}
-		curpos += int64(header.Offset)
+		curpos += int64(header.Length)
 	}
 	src.Close()
 	dest.Close()
@@ -386,7 +393,7 @@ func (db *SimpleDb[T]) rebuildOffsets() (err error) {
 		count  uint64
 	)
 
-	db.blockOffsets = make(Offsets)
+	db.blockOffsets = make(offsets)
 	var header blockHeader
 
 loop:
@@ -402,11 +409,11 @@ loop:
 			}
 		}
 
-		db.blockOffsets[ID(header.ID)] = curpos                                      // updat offsets map
-		db.keyMap[header.KeyHash] = append(db.keyMap[header.KeyHash], ID(header.ID)) // update kayhashmap
-		curpos += int64(header.Offset)                                               // update current position in the file
-		if ID(header.ID) > lastId {                                                  // keep track of the last id
-			lastId = ID(header.ID)
+		db.blockOffsets[ID(header.Id)] = curpos                                      // updat offsets map
+		db.keyMap[header.KeyHash] = append(db.keyMap[header.KeyHash], ID(header.Id)) // update kayhashmap
+		curpos += int64(header.Length)                                               // update current position in the file
+		if ID(header.Id) > lastId {                                                  // keep track of the last id
+			lastId = ID(header.Id)
 		}
 		count++
 	}
