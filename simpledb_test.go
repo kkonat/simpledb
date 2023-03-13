@@ -77,7 +77,7 @@ func TestBasicFunctionality(t *testing.T) {
 	if err != nil {
 		t.Error("error getting item ", id2, err)
 	}
-	pers, err := db2.GetByKey([]byte("Person1"))
+	pers, err := db2.Get([]byte("Person1"))
 	if err != nil {
 		t.Error("error getting by key", err)
 
