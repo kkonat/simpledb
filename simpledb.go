@@ -62,7 +62,7 @@ func Open[T any](filename string) (db *SimpleDb[T], err error) {
 
 	dbDataFile := filepath.Clean(filename)
 	dir, file := filepath.Split(dbDataFile)
-	dataFilePath := filepath.Join(dbPath, dir, file+dbExt)
+	dataFilePath := filepath.Join(dir, dbPath, file+dbExt)
 
 	if _, err = os.Stat(dbPath); err != nil {
 		os.Mkdir(dbPath, 0700)
@@ -70,14 +70,14 @@ func Open[T any](filename string) (db *SimpleDb[T], err error) {
 
 	db = &SimpleDb[T]{}
 
-	db.Cache.Initialize()
+	db.Cache.initialize()
 	db.keyMap = make(KeyHashes, 0)
 	db.markForDelete = make(DeleteFlags)
 	db.FilePath = dataFilePath
 
 	if _, err = os.Stat(dataFilePath); err == nil {
 		// if db file exists
-		if db.fileHandle, err = openDbFile(dataFilePath); err != nil {
+		if db.fileHandle, err = openFile(dataFilePath); err != nil {
 			return nil, fmt.Errorf("error opening database file: %w", err)
 		}
 		if err = db.rebuildOffsets(); err != nil {
@@ -86,20 +86,19 @@ func Open[T any](filename string) (db *SimpleDb[T], err error) {
 	} else {
 		// if not, initialize empty db
 		db.blockOffsets = make(Offsets)
-		db.fileHandle, err = openDbFile(dataFilePath)
+		db.fileHandle, err = openFile(dataFilePath)
 	}
 
 	return
 }
 
-func Close[T any](db *SimpleDb[T], dbName string) (err error) {
+func Destroy[T any](db *SimpleDb[T], dbName string) (err error) {
 	_, file := filepath.Split(db.FilePath)
 	if name := strings.Split(file, ".")[0]; name != dbName {
 		return errors.New("invalid db name provided")
 	}
 	db.fileHandle.Close()
-
-	db.Cache.Cleanup()
+	db.Cache.cleanup()
 	if err = os.Remove(db.FilePath); err != nil {
 		return fmt.Errorf("error removing datafile: %w", err)
 	}
@@ -146,15 +145,13 @@ func (db *SimpleDb[T]) Append(key []byte, value *T) (id ID, err error) {
 	return id, nil
 }
 
-// Gets one block from the database by Id
-func (db *SimpleDb[T]) GetById(id ID) (key []byte, val *T, err error) {
+// Gets one block from the database by Id, internal function, Id is internal idenifier and may change on subsequent item updates
+func (db *SimpleDb[T]) getById(id ID) (key []byte, val *T, err error) {
 	var mtx sync.Mutex
 	mtx.Lock()
 	defer mtx.Unlock()
 
-	// check if an object with the requested id has ever been created
-	seek, ok := db.blockOffsets[id] // if it is in offsets map
-	if !ok {
+	if !db.has(id) {
 		return nil, nil, &NotFoundError{id: id}
 	}
 
@@ -171,6 +168,7 @@ func (db *SimpleDb[T]) GetById(id ID) (key []byte, val *T, err error) {
 	}
 
 	// otherwise, read it from the database file
+	seek := db.blockLen(id)                // if it is in offsets map
 	db.fileHandle.Seek(seek, io.SeekStart) // move to the right position in the file
 	var blocksize uint32
 	if err = binary.Read(db.fileHandle, binary.LittleEndian, &blocksize); err != nil { // read OffsL bytes
@@ -203,6 +201,7 @@ func (db *SimpleDb[T]) GetById(id ID) (key []byte, val *T, err error) {
 	return block.key, val, err
 }
 
+// Gets a value for the given key
 func (db *SimpleDb[T]) Get(aKey []byte) (val *T, err error) {
 	keyHash := getHash([]byte(aKey))
 	ids, ok := db.keyMap[keyHash]
@@ -211,7 +210,7 @@ func (db *SimpleDb[T]) Get(aKey []byte) (val *T, err error) {
 	}
 	var key []byte
 	for _, id := range ids {
-		key, val, err = db.GetById(id)
+		key, val, err = db.getById(id)
 		if err == nil && keysEqual(key, aKey) {
 			return val, nil
 		}
@@ -219,31 +218,39 @@ func (db *SimpleDb[T]) Get(aKey []byte) (val *T, err error) {
 	return nil, &NotFoundError{}
 }
 
-func (db *SimpleDb[T]) Update(key []byte) error {
-	// GetByKey
-	// delete, i.e. mark for delete - remove from cache
-	// create new item and copy modified value, reuse ID ???? - if can delete afterwards
-	// add to cache?
-
-	return nil
+// Updates the value for the given key
+func (db *SimpleDb[T]) Update(aKey []byte, value *T) (id ID, err error) { // TODO: remove ID from return values, as it's an internal id
+	keyHash := getHash([]byte(aKey))
+	ids, ok := db.keyMap[keyHash]
+	if !ok {
+		return 0, &NotFoundError{}
+	}
+	for _, oldId := range ids {
+		key, _, err := db.getById(oldId)
+		if err == nil && keysEqual(aKey, key) {
+			db.deleteById(oldId)
+			break
+		}
+	}
+	id, err = db.Append(aKey, value)
+	return id, err
 }
 
-// Marks item with a given Id for deletion
-func (db *SimpleDb[T]) DeleteById(id ID) error {
-	// check if it ever was created
-	if _, ok := db.blockOffsets[id]; !ok {
+// Marks item with a given Id for deletion, internal function, may be used for testing/benchmarking
+func (db *SimpleDb[T]) deleteById(id ID) error {
+
+	if !db.has(id) {
 		return &NotFoundError{id: id}
 	}
 
-	// check if not already deleted - TODO: remove this check in future
+	//  TODO: remove this check in future, permit multiple deletes, now convenient for testing
 	if _, ok := db.markForDelete[id]; ok {
 		return errors.New("item already deleted") // TODO: fail gracefully here instead of error
 	} else {
 		db.markForDelete[id] = struct{}{}
 	}
 
-	// check if the item is cached, if so delete it from the cache
-	if ci, ok := db.Cache.data[id]; ok {
+	if ci, ok := db.Cache.getItem(id); ok {
 		db.Cache.removeItem(ci.ID)
 	} //else { TODO: debug this
 	// 	log.Info(fmt.Sprintf("why %d ", db.Cache.data[id].ID))
@@ -252,6 +259,8 @@ func (db *SimpleDb[T]) DeleteById(id ID) error {
 	db.capacity--
 	return nil
 }
+
+// deletes a db entry for the given db key
 func (db *SimpleDb[T]) Delete(aKey []byte) (err error) {
 	keyHash := getHash([]byte(aKey))
 	ids, ok := db.keyMap[keyHash]
@@ -261,9 +270,9 @@ func (db *SimpleDb[T]) Delete(aKey []byte) (err error) {
 	var key []byte
 	var id ID
 	for _, id = range ids {
-		key, _, err = db.GetById(id)
+		key, _, err = db.getById(id)
 		if err == nil && keysEqual(key, aKey) {
-			db.DeleteById(id)
+			db.deleteById(id)
 		}
 	}
 	return &NotFoundError{id: id}
@@ -271,14 +280,98 @@ func (db *SimpleDb[T]) Delete(aKey []byte) (err error) {
 
 // closes the database and performs necessary housekeeping
 func (db *SimpleDb[T]) Close() (err error) {
+	const tmpFile = dbPath + "temp.sdb"
+	var mtx sync.Mutex
+	var bytesWritten uint64
 
-	return db.fileHandle.Close()
-	// TODO
-	// db.toBeDeleted is a map of all objects marked to be toBeDeleted
-	// need to copy the database, while skipping this object
+	mtx.Lock()
+	defer mtx.Unlock()
+
+	db.fileHandle.Close()
+	if len(db.markForDelete) == 0 {
+		return nil
+	}
+
+	if bytesWritten, err = db.copyOmittingDeleted(tmpFile); err != nil {
+		return err
+	}
+
+	// substitute the temp file for the datbase file
+	if err := os.Remove(db.FilePath); err != nil {
+		return err
+	}
+
+	if bytesWritten == 0 {
+		if err := os.Remove(db.FilePath); err != nil {
+			return err
+		}
+		return nil
+	}
+	if err := os.Rename(tmpFile, db.FilePath); err != nil {
+		return err
+	}
+
+	db.Cache.cleanup()
+
+	// invalidate all internal structs
+	db.blockOffsets = nil
+	db.markForDelete = nil
+	for k := range db.keyMap {
+		delete(db.keyMap, k)
+	}
+	db.keyMap = nil
+
+	return
 }
 
-// generates new object id, now it's sequential, lager maybe change to guid or what
+func (db *SimpleDb[T]) copyOmittingDeleted(tmpFile string) (bytesWritten uint64, err error) {
+	var (
+		curpos int64
+		header blockHeader
+	)
+	// copy the database file to a temp file, while omitting deleted items
+	dest, err := openFile(tmpFile)
+	if err != nil {
+		return 0, err
+	}
+	src, err := openFile(db.FilePath)
+	if err != nil {
+		return 0, err
+	}
+loop:
+	for {
+		if _, err = src.Seek(curpos, 0); err != nil {
+			return 0, err
+		}
+		if err = binary.Read(src, binary.LittleEndian, &header); err != nil {
+			if errors.Is(err, io.EOF) {
+				break loop
+			} else {
+				return 0, err
+			}
+		}
+		if _, ok := db.markForDelete[ID(header.ID)]; !ok {
+			buff := make([]byte, header.Offset)
+			if _, err = src.Seek(curpos, 0); err != nil {
+				return 0, err
+			}
+			if _, err = src.Read(buff); err != nil {
+				return 0, err
+			}
+			if n, err := dest.Write(buff); err != nil {
+				bytesWritten += uint64(n)
+				return bytesWritten, err
+			}
+		}
+		curpos += int64(header.Offset)
+	}
+	src.Close()
+	dest.Close()
+
+	return
+}
+
+// generates new object id, now it's sequential, later maybe change to guid or what
 func (db *SimpleDb[T]) genNewId() (id ID) {
 	id = ID(db.lastId)
 	db.lastId++
@@ -323,11 +416,31 @@ loop:
 	return nil
 }
 
-func openDbFile(path string) (file *os.File, err error) {
+// helper functions
+
+// opens the file, used for keeping track of the open/rw/create mode
+func openFile(path string) (file *os.File, err error) {
 	file, err = os.OpenFile(path, os.O_APPEND|os.O_RDWR|os.O_CREATE, 0600)
 	return
 }
 
+// checks if the database has an element with the given ID
+func (db *SimpleDb[T]) has(id ID) (ok bool) {
+	_, ok = db.blockOffsets[id]
+	return
+}
+
+// returns lenght of a block of an item with the given ID in the database, reads this data from RAM
+func (db *SimpleDb[T]) blockLen(id ID) int64 {
+	offs, ok := db.blockOffsets[id]
+	if !ok {
+		// panics, because this func must be called from after the has() check
+		panic("item never created")
+	}
+	return offs
+}
+
+// compares two keys provided as []byte slices
 func keysEqual(a, b []byte) bool {
 	if len(a) != len(b) {
 		return false
@@ -340,7 +453,8 @@ func keysEqual(a, b []byte) bool {
 	return true
 }
 
-func printBuff(bytes []byte) {
+// prints out the []byte slice content
+func printBytes(bytes []byte) {
 	for _, b := range bytes {
 		if b >= ' ' && b <= '~' {
 			fmt.Printf("%c", b)
