@@ -53,7 +53,7 @@ The following operations are supported as of now:
 
 | Operation  | Description  |
 | ---------- | :---------------------------------------------------------------- |
-| NewDb      | creates the database if it does not exist or opens if it does |
+| Open       | creates and opens the database if it does not exist or opens if it does |
 | Append     | appends data item to the database|
 | Update     | updates data item with the given key |
 | Get        | gets data item from the database by key |

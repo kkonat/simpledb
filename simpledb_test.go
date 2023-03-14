@@ -9,7 +9,7 @@ import (
 )
 
 func TestNew(t *testing.T) {
-	d, err := NewDb[Person]("testdb", 0)
+	d, err := Open[Person]("testdb", 0)
 	if err != nil {
 		t.Errorf("failed to create database: %v", err)
 	}
@@ -29,23 +29,27 @@ var testData []Person = []Person{
 
 func TestDestroy(t *testing.T) {
 	const CacheSize = 0
-	db, err := NewDb[Person]("testdb", CacheSize)
+	db, err := Open[Person]("testdb", CacheSize)
 	if err != nil {
 		t.Errorf("failed to create database: %v", err)
 	}
 	db.Append([]byte("Person1"), &testData[0])
 	db.Close()
-	err = Destroy("db\\testdb.sdb")
+	err = db.Destroy()
 	if err != nil {
 		t.Errorf("failed to kill database: %v", err)
 	}
 }
 func TestBasicFunctionality(t *testing.T) {
 	const CacheSize = 100
-	Destroy("db\\testdb.sdb")
 
 	var err error
-	db1, err := NewDb[Person]("testdb", CacheSize)
+	db1, _ := Open[Person]("testdb", 0)
+	err = db1.Destroy()
+	if err != nil {
+		t.Errorf("failed to destroy database: %v", err)
+	}
+	db1, err = Open[Person]("testdb", CacheSize)
 	if err != nil {
 		t.Errorf("failed to create database: %v", err)
 	}
@@ -66,7 +70,7 @@ func TestBasicFunctionality(t *testing.T) {
 	}
 	db1.Close()
 
-	db2, err := NewDb[Person]("testdb", CacheSize)
+	db2, err := Open[Person]("testdb", CacheSize)
 	if err != nil {
 		t.Errorf("failed to open database: %v", err)
 	}
@@ -139,8 +143,9 @@ func TestCache(t *testing.T) {
 	)
 	const CacheSize = 100
 
-	Destroy("db\\benchmark.sdb")
-	db, _ := NewDb[benchmarkData]("benchmark", CacheSize)
+	db, _ := Open[benchmarkData]("benchmark", CacheSize)
+	db.Destroy()
+	db, _ = Open[benchmarkData]("benchmark", CacheSize)
 
 	// gen 2 x times the cache capacity
 	// so the expected hitrate is 50%
@@ -154,7 +159,7 @@ func TestCache(t *testing.T) {
 	}
 	db.Close()
 
-	db, _ = NewDb[benchmarkData]("benchmark", CacheSize)
+	db, _ = Open[benchmarkData]("benchmark", CacheSize)
 	for n := 0; n < numElements; n++ {
 		rndNo := ID(rand.Intn(numElements))
 		if _, d, err = db.getById(rndNo); err != nil {
@@ -179,9 +184,10 @@ func TestDeleteLogic(t *testing.T) {
 	seq := genRandomSequence(N) // shuffle Item IDs to delete them randomly
 	hashes := make([]Hash, N)
 
-	Destroy("benchmark")
+	db, _ := Open[benchmarkData]("benchmark", CacheSize)
+	db.Destroy()
 
-	db, _ := NewDb[benchmarkData]("benchmark", CacheSize)
+	db, _ = Open[benchmarkData]("benchmark", CacheSize)
 
 	// add
 	for n := 0; n < N; n++ {

@@ -45,13 +45,12 @@ type SimpleDb[T any] struct {
 	deleted       DeleteFlags
 	blockOffsets  BlockOffsets
 	keyMap        KeyHashes
+	mtx           sync.Mutex
 }
 
 // creates a new database or opens an existing one
-func NewDb[T any](filename string, cacheSize uint32) (db *SimpleDb[T], err error) {
-	var mtx sync.Mutex
-	mtx.Lock()
-	defer mtx.Unlock()
+func Open[T any](filename string, cacheSize uint32) (db *SimpleDb[T], err error) {
+	db = &SimpleDb[T]{}
 
 	dbDataFile := filepath.Clean(filename)
 	dir, file := filepath.Split(dbDataFile)
@@ -61,13 +60,13 @@ func NewDb[T any](filename string, cacheSize uint32) (db *SimpleDb[T], err error
 		os.Mkdir(dbPath, 0700)
 	}
 
-	db = &SimpleDb[T]{}
-
 	db.cache = newCache[T](cacheSize)
 	db.keyMap = make(KeyHashes, 0)
 	db.deleted = make(DeleteFlags)
 	db.filePath = dataFilePath
 
+	db.mtx.Lock()
+	defer db.mtx.Unlock()
 	if _, err = os.Stat(dataFilePath); err == nil {
 		// if db file exists
 		if db.fileHandle, err = openFile(dataFilePath); err != nil {
@@ -86,12 +85,12 @@ func NewDb[T any](filename string, cacheSize uint32) (db *SimpleDb[T], err error
 }
 
 // Removes the database file from disk, permanently and irreversibly
-func Destroy(dbName string) (err error) {
-	var mtx sync.Mutex
-	mtx.Lock()
-	defer mtx.Unlock()
+func (db *SimpleDb[T]) Destroy() (err error) {
 
-	if err = os.Remove(dbName); err != nil {
+	db.mtx.Lock()
+	defer db.mtx.Unlock()
+	db.fileHandle.Close()
+	if err = os.Remove(db.filePath); err != nil {
 		return fmt.Errorf("error removing datafile: %w", err)
 	}
 	return
@@ -99,9 +98,11 @@ func Destroy(dbName string) (err error) {
 
 // Appends a key, value pair to the database, returns added block id, and error, if any
 func (db *SimpleDb[T]) Append(key []byte, value *T) (id ID, err error) {
-	var mtx sync.Mutex
-	mtx.Lock()
-	defer mtx.Unlock()
+	db.mtx.Lock()
+	defer db.mtx.Unlock()
+	return db.appendUnlocked(key, value)
+}
+func (db *SimpleDb[T]) appendUnlocked(key []byte, value *T) (id ID, err error) {
 
 	var payload []byte
 	if payload, err = borsh.Serialize(value); err != nil {
@@ -142,9 +143,6 @@ func (db *SimpleDb[T]) Append(key []byte, value *T) (id ID, err error) {
 // This is an internal function,
 // Id is also an internal idenifier which  may change on subsequent item updates
 func (db *SimpleDb[T]) getById(id ID) (key []byte, value *T, err error) {
-	var mtx sync.Mutex
-	mtx.Lock()
-	defer mtx.Unlock()
 
 	if !db.has(id) {
 		return nil, nil, &NotFoundError{id: id}
@@ -201,6 +199,9 @@ func (db *SimpleDb[T]) getById(id ID) (key []byte, value *T, err error) {
 
 // Gets a value for the given key
 func (db *SimpleDb[T]) Get(searchedKey []byte) (val *T, err error) {
+	db.mtx.Lock()
+	defer db.mtx.Unlock()
+
 	var candidateKey []byte
 	keyHash := getHash([]byte(searchedKey))
 
@@ -220,9 +221,8 @@ func (db *SimpleDb[T]) Get(searchedKey []byte) (val *T, err error) {
 
 // Updates the value for the given key
 func (db *SimpleDb[T]) Update(keyToUpdate []byte, value *T) (err error) {
-	var mtx sync.Mutex
-	mtx.Lock()
-	defer mtx.Unlock()
+	db.mtx.Lock()
+	defer db.mtx.Unlock()
 
 	keyHash := getHash([]byte(keyToUpdate))
 
@@ -241,15 +241,12 @@ func (db *SimpleDb[T]) Update(keyToUpdate []byte, value *T) (err error) {
 	}
 
 	// add themodified key,value pair as a new db Item
-	_, err = db.Append(keyToUpdate, value)
+	_, err = db.appendUnlocked(keyToUpdate, value)
 	return err
 }
 
 // Marks item with a given Id for deletion, internal function, may be used for testing/benchmarking
 func (db *SimpleDb[T]) deleteById(id ID, keyHash Hash) error {
-	var mtx sync.Mutex
-	mtx.Lock()
-	defer mtx.Unlock()
 
 	if !db.has(id) {
 		return &NotFoundError{id: id}
@@ -288,6 +285,9 @@ func (db *SimpleDb[T]) deleteById(id ID, keyHash Hash) error {
 
 // deletes a db item identified with the provided db key
 func (db *SimpleDb[T]) Delete(aKey []byte) (err error) {
+	db.mtx.Lock()
+	defer db.mtx.Unlock()
+
 	keyHash := getHash([]byte(aKey))
 	ids, ok := db.keyMap[keyHash]
 	if !ok {
@@ -306,9 +306,8 @@ func (db *SimpleDb[T]) Delete(aKey []byte) (err error) {
 
 // closes the database and performs necessary housekeeping
 func (db *SimpleDb[T]) Close() (err error) {
-	var mtx sync.Mutex
-	mtx.Lock()
-	defer mtx.Unlock()
+	db.mtx.Lock()
+	defer db.mtx.Unlock()
 
 	var bytesWritten uint64
 
@@ -473,37 +472,3 @@ func (db *SimpleDb[T]) blockLen(id ID) uint64 {
 	}
 	return offs
 }
-
-// compares two keys provided as []byte slices
-func keysEqual(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i, v := range a {
-		if v != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-// prints out the []byte slice content
-func printBytes(bytes []byte) {
-	for _, b := range bytes {
-		if b >= ' ' && b <= '~' {
-			fmt.Printf("%c", b)
-		} else {
-			fmt.Printf("%02x ", b)
-		}
-	}
-	fmt.Println("")
-}
-
-// calculates hash of a buffer - must be fast and relatively collission-safe
-// 32 bits for mostly human-readable key values is obviously an overkill
-func getHash(data []byte) Hash {
-	return Hash(crc32.Checksum(data, crc32table))
-}
-
-// or for fun, let's try this function
-// http://www.azillionmonkeys.com/qed/hash.html
