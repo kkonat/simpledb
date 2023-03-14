@@ -9,7 +9,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -29,37 +28,28 @@ func init() {
 	log.SetLevel(log.DebugLevel)
 }
 
-type ID uint32
-type offsets map[ID]int64
-type keyHashes map[uint32][]ID
-type deleteFlags map[ID]struct{}
-
-type NotFoundError struct {
-	id  ID
-	Err error
-}
-
-func (r *NotFoundError) Error() string {
-	return fmt.Sprintf("item %d not found", r.id)
-}
+type Key []byte                 // keys are bytes, since strings would be a waste
+type Hash uint32                // no need for larger hashes for now
+type ID uint32                  // this is small database, so let's assume it may hold "only" 4 billion k,v pairs
+type BlockOffsets map[ID]uint64 // blocks may be up to 4GB?
+type KeyHashes map[Hash][]ID
+type DeleteFlags map[ID]struct{}
 
 type SimpleDb[T any] struct {
 	filePath   string
 	fileHandle *os.File
 
-	cache[T]
-
-	capacity      uint64
-	currentOffset int64
-	lastId        ID
-
-	markedForDelete deleteFlags
-	blockOffsets    offsets
-	keyMap          keyHashes
+	cache         *cache[T]
+	ItemsCount    uint64
+	currentOffset uint64 // as blocks may be up to  4GB long, the file length/index must be at least uint64
+	highestId     ID
+	deleted       DeleteFlags
+	blockOffsets  BlockOffsets
+	keyMap        KeyHashes
 }
 
-func Open[T any](filename string) (db *SimpleDb[T], err error) {
-
+// creates a new database or opens an existing one
+func NewDb[T any](filename string, cacheSize uint32) (db *SimpleDb[T], err error) {
 	dbDataFile := filepath.Clean(filename)
 	dir, file := filepath.Split(dbDataFile)
 	dataFilePath := filepath.Join(dir, dbPath, file+dbExt)
@@ -70,9 +60,9 @@ func Open[T any](filename string) (db *SimpleDb[T], err error) {
 
 	db = &SimpleDb[T]{}
 
-	db.cache.initialize()
-	db.keyMap = make(keyHashes, 0)
-	db.markedForDelete = make(deleteFlags)
+	db.cache = newCache[T](cacheSize)
+	db.keyMap = make(KeyHashes, 0)
+	db.deleted = make(DeleteFlags)
 	db.filePath = dataFilePath
 
 	if _, err = os.Stat(dataFilePath); err == nil {
@@ -80,30 +70,23 @@ func Open[T any](filename string) (db *SimpleDb[T], err error) {
 		if db.fileHandle, err = openFile(dataFilePath); err != nil {
 			return nil, fmt.Errorf("error opening database file: %w", err)
 		}
-		if err = db.rebuildOffsets(); err != nil {
+		if err = db.read(); err != nil {
 			return nil, fmt.Errorf("error rebuilding offsets: %w", err)
 		}
 	} else {
 		// if not, initialize empty db
-		db.blockOffsets = make(offsets)
+		db.blockOffsets = make(BlockOffsets)
 		db.fileHandle, err = openFile(dataFilePath)
 	}
 
 	return
 }
 
-// Closes and removes the database file from disk, requires db filename to be provided, for safety
-func Destroy[T any](db *SimpleDb[T], dbName string) (err error) {
-	_, file := filepath.Split(db.filePath)
-	if name := strings.Split(file, ".")[0]; name != dbName {
-		return errors.New("invalid db name provided")
-	}
-	db.fileHandle.Close()
-	db.cache.cleanup()
-	if err = os.Remove(db.filePath); err != nil {
+// Removes the database file from disk, permanently and irreversibly
+func Destroy(dbName string) (err error) {
+	if err = os.Remove(dbName); err != nil {
 		return fmt.Errorf("error removing datafile: %w", err)
 	}
-	db = nil
 	return
 }
 
@@ -120,19 +103,20 @@ func (db *SimpleDb[T]) Append(key []byte, value *T) (id ID, err error) {
 	if len(payload) > math.MaxUint32 { // payload must not be too large, ha ha
 		panic("payload too large")
 	}
-	//prepare block header values
+
 	id = db.genNewId()
 	timestamp := uint64(time.Now().Unix())
+
 	block := NewBlock(id, timestamp, key, payload) // and then the payload
 
-	// write everything at once (pretending to be atomic)
+	// write whole block  at once
 	if bytesWritten, err := db.fileHandle.Write(block.getBytes()); err != nil || uint32(bytesWritten) != block.Length {
 		return 0, fmt.Errorf("error writing datafile: %w", err)
 	}
 
-	db.blockOffsets[id] = db.currentOffset  // add to offsets map
-	db.currentOffset += int64(block.Length) // update current offset
-	db.capacity++                           // update db capacity
+	db.blockOffsets[id] = db.currentOffset   // add to offsets map
+	db.currentOffset += uint64(block.Length) // update current offset
+	db.ItemsCount++                          // update db capacity
 
 	// Cache the newly added item
 	db.cache.addItem(&cacheItem[T]{
@@ -146,8 +130,10 @@ func (db *SimpleDb[T]) Append(key []byte, value *T) (id ID, err error) {
 	return id, nil
 }
 
-// Gets one block from the database by Id, internal function, Id is internal idenifier and may change on subsequent item updates
-func (db *SimpleDb[T]) getById(id ID) (key []byte, val *T, err error) {
+// Gets one key, value pair from the database for the given Id
+// This is an internal function,
+// Id is also an internal idenifier which  may change on subsequent item updates
+func (db *SimpleDb[T]) getById(id ID) (key []byte, value *T, err error) {
 	var mtx sync.Mutex
 	mtx.Lock()
 	defer mtx.Unlock()
@@ -156,37 +142,39 @@ func (db *SimpleDb[T]) getById(id ID) (key []byte, val *T, err error) {
 		return nil, nil, &NotFoundError{id: id}
 	}
 
-	// check if it is cached
-	if object, ok := db.cache.getItem(id); ok {
-		if _, ok := db.markedForDelete[id]; !ok { // if in cache and not deleted
+	// get from cache if cached
+	if object, ok := db.cache.checkaAndGetItem(id); ok {
+		if _, ok := db.deleted[id]; !ok { // if in cache and not deleted
 			return object.Key, object.Value, nil
 		}
 	}
 
-	// check if it has not been marked for deletion
-	if _, ok := db.markedForDelete[id]; ok {
+	// check if the item has not been markedad deleted
+	if _, ok := db.deleted[id]; ok {
 		return nil, nil, &NotFoundError{id: id}
 	}
 
-	// otherwise, read it from the database file
-	seek := db.blockLen(id)                // if it is in offsets map
-	db.fileHandle.Seek(seek, io.SeekStart) // move to the right position in the file
+	// or else, read data item from the database file
+	seek := db.blockLen(id)
+
+	db.fileHandle.Seek(int64(seek), io.SeekStart) // move to the right position in the file
 	var blocksize uint32
 	if err = binary.Read(db.fileHandle, binary.LittleEndian, &blocksize); err != nil { // read OffsL bytes
 		return nil, nil, err
 	}
-	db.fileHandle.Seek(seek, io.SeekStart)
-
 	buff := make([]byte, blocksize)
+
+	db.fileHandle.Seek(int64(seek), io.SeekStart)
 	if _, err = db.fileHandle.Read(buff); err != nil {
 		return nil, nil, err
 	}
 	block := &block{}
 	block.setBytes(buff)
 
+	key = block.key
+	value = new(T)
 	// unmarshall payload
-	val = new(T)
-	if err := borsh.Deserialize(&val, block.value); err != nil {
+	if err := borsh.Deserialize(&value, block.value); err != nil {
 		return nil, nil, fmt.Errorf("error deserializing: %w", err)
 	}
 
@@ -195,24 +183,26 @@ func (db *SimpleDb[T]) getById(id ID) (key []byte, val *T, err error) {
 		ID:       ID(block.Id),
 		LastUsed: block.Timestamp,
 		KeyHash:  block.KeyHash,
-		Key:      block.key,
-		Value:    val,
+		Key:      key,
+		Value:    value,
 	})
 
-	return block.key, val, err
+	return
 }
 
 // Gets a value for the given key
-func (db *SimpleDb[T]) Get(aKey []byte) (val *T, err error) {
-	keyHash := getHash([]byte(aKey))
-	ids, ok := db.keyMap[keyHash]
+func (db *SimpleDb[T]) Get(searchedKey []byte) (val *T, err error) {
+	var candidateKey []byte
+	keyHash := getHash([]byte(searchedKey))
+
+	idCandidates, ok := db.keyMap[keyHash]
 	if !ok {
 		return nil, &NotFoundError{}
 	}
-	var key []byte
-	for _, id := range ids {
-		key, val, err = db.getById(id)
-		if err == nil && keysEqual(key, aKey) {
+
+	for _, candidate := range idCandidates {
+		candidateKey, val, err = db.getById(candidate) // get actual keys
+		if err == nil && keysEqual(candidateKey, searchedKey) {
 			return val, nil
 		}
 	}
@@ -220,53 +210,71 @@ func (db *SimpleDb[T]) Get(aKey []byte) (val *T, err error) {
 }
 
 // Updates the value for the given key
-func (db *SimpleDb[T]) Update(aKey []byte, value *T) (id ID, err error) { // TODO: remove ID from return values, as it's an internal id
-	keyHash := getHash([]byte(aKey))
-	ids, ok := db.keyMap[keyHash]
+func (db *SimpleDb[T]) Update(keyToUpdate []byte, value *T) (id ID, err error) { // TODO: remove ID from return values, as it's an internal id
+	keyHash := getHash([]byte(keyToUpdate))
+
+	idCandidates, ok := db.keyMap[keyHash]
 	if !ok {
 		return 0, &NotFoundError{}
 	}
-	for _, oldId := range ids {
-		key, _, err := db.getById(oldId)
-		if err == nil && keysEqual(aKey, key) {
-			db.deleteById(oldId, keyHash)
+
+	// find and delete old key,value pair
+	for _, candidate := range idCandidates {
+		candidateKey, _, err := db.getById(candidate)
+		if err == nil && keysEqual(keyToUpdate, candidateKey) {
+			db.deleteById(candidate, keyHash)
 			break
 		}
 	}
-	id, err = db.Append(aKey, value)
+
+	// add themodified key,value pair as a new db Item
+	id, err = db.Append(keyToUpdate, value)
 	return id, err
 }
 
 // Marks item with a given Id for deletion, internal function, may be used for testing/benchmarking
-func (db *SimpleDb[T]) deleteById(id ID, keyHash uint32) error {
+func (db *SimpleDb[T]) deleteById(id ID, keyHash Hash) error {
 
 	if !db.has(id) {
 		return &NotFoundError{id: id}
 	}
 
 	//  TODO: remove this check in future, permit multiple deletes, now convenient for testing
-	if _, ok := db.markedForDelete[id]; ok {
+	if _, ok := db.deleted[id]; ok {
 		return errors.New("item already deleted") // TODO: fail gracefully here instead of error
 	} else {
-		db.markedForDelete[id] = struct{}{}
+		db.deleted[id] = struct{}{} // set map to empty value as a flag indicating the item is to be deleted
 	}
 
-	if ci, ok := db.cache.getItem(id); ok {
-		db.cache.removeItem(ci.ID)
-	} //else { TODO: debug this
-	// 	log.Info(fmt.Sprintf("why %d ", db.cache.data[id].ID))
-	// }
-	ids := db.keyMap[keyHash]
-	for i, cid := range ids {
-		if cid == id {
-			db.keyMap[keyHash] = append(ids[:i], ids[i+1:]...)
+	// remove the item from cache, if it is there
+	if cachedItem, ok := db.cache.checkaAndGetItem(id); ok {
+		db.cache.removeItem(cachedItem.ID)
+	} //else {
+	// TODO: debug this - sometimes, when testing execution falls into this "else" branch,
+	// even if the object is in fact in the cache
+	// log.Info(fmt.Sprintf("why %d ", db.cache.data[id].ID))
+	//}
+
+	// remove the item from keyMap
+
+	// this part is the reason  why keyHash must be passed to this method, anyway it is usually known to the calling function
+	// if the item is cached, keyHash could be obtained from the cache, but if it's not it would have to be read from disk,
+	// which is what I wanted to avoid
+
+	// keyMap contains lists of item ids, which share the same keyHash value, due to hashing collisions
+	// to remove keyHash <-> id assignment, one has to find the right Id in the lice
+	idList := db.keyMap[keyHash]
+	for i, candidateId := range idList {
+		if candidateId == id {
+			db.keyMap[keyHash] = append(idList[:i], idList[i+1:]...)
 		}
 	}
-	db.capacity--
+
+	db.ItemsCount--
 	return nil
 }
 
-// deletes a db entry for the given db key
+// deletes a db item identified with the provided db key
 func (db *SimpleDb[T]) Delete(aKey []byte) (err error) {
 	keyHash := getHash([]byte(aKey))
 	ids, ok := db.keyMap[keyHash]
@@ -294,7 +302,7 @@ func (db *SimpleDb[T]) Close() (err error) {
 	defer mtx.Unlock()
 
 	db.fileHandle.Close()
-	if len(db.markedForDelete) == 0 {
+	if len(db.deleted) == 0 {
 		return nil
 	}
 
@@ -321,7 +329,7 @@ func (db *SimpleDb[T]) Close() (err error) {
 
 	// invalidate all internal structs
 	db.blockOffsets = nil
-	db.markedForDelete = nil
+	db.deleted = nil
 	for k := range db.keyMap {
 		delete(db.keyMap, k)
 	}
@@ -357,7 +365,7 @@ loop:
 				return 0, err
 			}
 		}
-		if _, ok := db.markedForDelete[ID(header.Id)]; !ok {
+		if _, ok := db.deleted[ID(header.Id)]; !ok {
 			buff := make([]byte, header.Length)
 			if _, err = src.Seek(curpos, 0); err != nil {
 				return 0, err
@@ -380,25 +388,25 @@ loop:
 
 // generates new object id, now it's sequential, later maybe change to guid or what
 func (db *SimpleDb[T]) genNewId() (id ID) {
-	id = ID(db.lastId)
-	db.lastId++
+	id = ID(db.highestId)
+	db.highestId++
 	return
 }
 
 // rebuilds internal database structure: offsets map and key hash map
-func (db *SimpleDb[T]) rebuildOffsets() (err error) {
+func (db *SimpleDb[T]) read() (err error) {
 	var (
-		curpos int64
+		curpos uint64
 		lastId ID
 		count  uint64
 	)
 
-	db.blockOffsets = make(offsets)
+	db.blockOffsets = make(BlockOffsets)
 	var header blockHeader
 
 loop:
 	for {
-		if _, err = db.fileHandle.Seek(curpos, 0); err != nil {
+		if _, err = db.fileHandle.Seek(int64(curpos), 0); err != nil {
 			return err
 		}
 		if err = binary.Read(db.fileHandle, binary.LittleEndian, &header); err != nil {
@@ -411,15 +419,15 @@ loop:
 
 		db.blockOffsets[ID(header.Id)] = curpos                                      // updat offsets map
 		db.keyMap[header.KeyHash] = append(db.keyMap[header.KeyHash], ID(header.Id)) // update kayhashmap
-		curpos += int64(header.Length)                                               // update current position in the file
+		curpos += uint64(header.Length)                                              // update current position in the file
 		if ID(header.Id) > lastId {                                                  // keep track of the last id
 			lastId = ID(header.Id)
 		}
 		count++
 	}
 	db.currentOffset = curpos // update database parameters
-	db.capacity = count
-	db.lastId = lastId
+	db.ItemsCount = count
+	db.highestId = lastId
 	return nil
 }
 
@@ -438,7 +446,7 @@ func (db *SimpleDb[T]) has(id ID) (ok bool) {
 }
 
 // returns lenght of a block of an item with the given ID in the database, reads this data from RAM
-func (db *SimpleDb[T]) blockLen(id ID) int64 {
+func (db *SimpleDb[T]) blockLen(id ID) uint64 {
 	offs, ok := db.blockOffsets[id]
 	if !ok {
 		// panics, because this func must be called from after the has() check
@@ -474,8 +482,8 @@ func printBytes(bytes []byte) {
 
 // calculates hash of a buffer - must be fast and relatively collission-safe
 // 32 bits for mostly human-readable key values is obviously an overkill
-func getHash(data []byte) uint32 {
-	return crc32.Checksum(data, crc32table)
+func getHash(data []byte) Hash {
+	return Hash(crc32.Checksum(data, crc32table))
 }
 
 // or for fun, let's try this function

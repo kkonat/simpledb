@@ -9,7 +9,7 @@ import (
 )
 
 func TestNew(t *testing.T) {
-	d, err := Open[Person]("testdb")
+	d, err := NewDb[Person]("testdb", 0)
 	if err != nil {
 		t.Errorf("failed to create database: %v", err)
 	}
@@ -27,22 +27,25 @@ var testData []Person = []Person{
 	{"Ulrika", "Van der Klompfer", 666},
 }
 
-func TestKill(t *testing.T) {
-	db1, err := Open[Person]("testdb")
+func TestDestroy(t *testing.T) {
+	const CacheSize = 0
+	db, err := NewDb[Person]("testdb", CacheSize)
 	if err != nil {
 		t.Errorf("failed to create database: %v", err)
 	}
-	err = Destroy(db1, "testdb")
+	db.Append([]byte("Person1"), &testData[0])
+	db.Close()
+	err = Destroy("db\\testdb.sdb")
 	if err != nil {
 		t.Errorf("failed to kill database: %v", err)
 	}
 }
 func TestBasicFunctionality(t *testing.T) {
-	db1, _ := Open[Person]("testdb")
-	Destroy(db1, "testdb")
+	const CacheSize = 100
+	Destroy("db\\testdb.sdb")
 
 	var err error
-	db1, err = Open[Person]("testdb")
+	db1, err := NewDb[Person]("testdb", CacheSize)
 	if err != nil {
 		t.Errorf("failed to create database: %v", err)
 	}
@@ -63,14 +66,14 @@ func TestBasicFunctionality(t *testing.T) {
 	}
 	db1.Close()
 
-	db2, err := Open[Person]("testdb")
+	db2, err := NewDb[Person]("testdb", CacheSize)
 	if err != nil {
 		t.Errorf("failed to open database: %v", err)
 	}
 	if db1.currentOffset != db2.currentOffset {
 		t.Error("different offsets")
 	}
-	if db1.capacity != db2.capacity {
+	if db1.ItemsCount != db2.ItemsCount {
 		t.Error("differenc counters")
 	}
 	_, _, err = db2.getById(id2)
@@ -136,14 +139,14 @@ func TestCache(t *testing.T) {
 		d   *benchmarkData
 		err error
 	)
+	const CacheSize = 100
 
-	db, _ := Open[benchmarkData]("benchmark")
-	Destroy(db, "benchmark")
-	db, _ = Open[benchmarkData]("benchmark")
+	Destroy("db\\benchmark.sdb")
+	db, _ := NewDb[benchmarkData]("benchmark", CacheSize)
 
 	// gen 2 x times the cache capacity
 	// so the expected hitrate is 50%
-	var numElements = 2 * CacheMaxItems
+	var numElements = int(2 * CacheSize)
 
 	reference := make(map[ID]string)
 	for n := 0; n < numElements; n++ {
@@ -153,7 +156,7 @@ func TestCache(t *testing.T) {
 	}
 	db.Close()
 
-	db, _ = Open[benchmarkData]("benchmark")
+	db, _ = NewDb[benchmarkData]("benchmark", CacheSize)
 	for n := 0; n < numElements; n++ {
 		rndNo := ID(rand.Intn(numElements))
 		if _, d, err = db.getById(rndNo); err != nil {
@@ -163,7 +166,7 @@ func TestCache(t *testing.T) {
 			t.Error("values dont match", rndNo)
 		}
 	}
-	log.Info("Cache Hit rate: ", db.GetHitRate(), " %")
+	log.Info("Cache Hit rate: ", db.cache.GetHitRate(), " %")
 }
 
 func TestDeleteLogic(t *testing.T) {
@@ -171,15 +174,17 @@ func TestDeleteLogic(t *testing.T) {
 		value *benchmarkData
 		err   error
 	)
-	const N = CacheMaxItems * 2
+	const CacheSize = 100
+	const N = 200
+
 	log.Info("Testing N = ", N)
 	seq := genRandomSequence(N) // shuffle Item IDs to delete them randomly
-	hashes := make([]uint32, N)
+	hashes := make([]Hash, N)
 
-	db, _ := Open[benchmarkData]("benchmark")
-	Destroy(db, "benchmark")
+	Destroy("benchmark")
 
-	db, _ = Open[benchmarkData]("benchmark")
+	db, _ := NewDb[benchmarkData]("benchmark", CacheSize)
+
 	// add
 	for n := 0; n < N; n++ {
 		value = NewBenchmarkData(n)
@@ -201,7 +206,7 @@ func TestDeleteLogic(t *testing.T) {
 	}
 
 	// everything should be deleted now
-	l := len(db.markedForDelete)
+	l := len(db.deleted)
 	if l != N {
 		t.Error("there should be ", N, " deleted")
 	}

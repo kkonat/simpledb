@@ -13,6 +13,35 @@ type benchmarkData struct {
 	Str   string
 }
 
+func BenchmarkCache(b *testing.B) {
+	var (
+		d   *benchmarkData
+		err error
+	)
+	const CacheSize = 100
+	const numElements = 200
+
+	Destroy("benchmark")
+	db, _ := NewDb[benchmarkData]("benchmark", CacheSize)
+
+	reference := make(map[ID]string)
+	for n := 0; n < numElements; n++ {
+		d = NewBenchmarkData(n)
+		db.Append([]byte(fmt.Sprintf("Item%d", n)), d)
+		reference[ID(n)] = d.Str
+	}
+	db.Close()
+
+	db, _ = NewDb[benchmarkData]("benchmark", CacheSize)
+	for n := 0; n < b.N; n++ {
+		rndNo := ID(rand.Intn(numElements))
+		if _, _, err = db.getById(rndNo); err != nil {
+			b.Error("get failed")
+		}
+	}
+	log.Info("-> ", b.N, " iterations. Cache Hit rate: ", db.cache.GetHitRate(), " %")
+}
+
 var letterRunes = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
 
 func NewBenchmarkData(n int) *benchmarkData {
@@ -48,34 +77,4 @@ func genRandomSequence(N int) []int {
 		}
 	}
 	return seq
-}
-
-func BenchmarkCache(b *testing.B) {
-	var (
-		d   *benchmarkData
-		err error
-	)
-
-	db, _ := Open[benchmarkData]("benchmark")
-	Destroy(db, "benchmark")
-	db, _ = Open[benchmarkData]("benchmark")
-
-	var numElements = int(CacheMaxItems * 2)
-
-	reference := make(map[ID]string)
-	for n := 0; n < numElements; n++ {
-		d = NewBenchmarkData(n)
-		db.Append([]byte(fmt.Sprintf("Item%d", n)), d)
-		reference[ID(n)] = d.Str
-	}
-	db.Close()
-
-	db, _ = Open[benchmarkData]("benchmark")
-	for n := 0; n < b.N; n++ {
-		rndNo := ID(rand.Intn(numElements))
-		if _, _, err = db.getById(rndNo); err != nil {
-			b.Error("get failed")
-		}
-	}
-	log.Info("-> ", b.N, " iterations. Cache Hit rate: ", db.GetHitRate(), " %")
 }

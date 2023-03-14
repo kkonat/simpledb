@@ -8,9 +8,9 @@ import (
 
 type blockHeader struct {
 	Length    uint32 // uppercase, because must be exportable for binary encoding
-	Id        uint32
+	Id        ID
 	Timestamp uint64
-	KeyHash   uint32
+	KeyHash   Hash
 	KeyLen    uint32 // can not be uint16, data is 32-bit word-aligned anyway, sizeof will return untrue no. of bytes
 }
 
@@ -31,7 +31,7 @@ func NewBlock(id ID, timestamp uint64, key []byte, value []byte) *block {
 	headerLen := int(unsafe.Sizeof(header))
 	blockLen := headerLen + len(key) + len(value)
 	header = blockHeader{
-		Id:        uint32(id),
+		Id:        id,
 		Timestamp: timestamp,
 		KeyHash:   getHash(key),
 		KeyLen:    uint32(len(key)),
