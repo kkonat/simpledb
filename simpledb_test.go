@@ -199,7 +199,9 @@ func TestDeleteLogic(t *testing.T) {
 			t.Error("should be able to delete")
 		}
 	}
+
 	// delete last on
+	log.Info("cache len:", len(db.cache.queue))
 	err = db.deleteById(0, hashes[0])
 	if err == nil {
 		t.Error("should not be able to delete")
@@ -210,11 +212,12 @@ func TestDeleteLogic(t *testing.T) {
 	if l != N {
 		t.Error("there should be ", N, " deleted")
 	}
-	l = len(db.cache.queue)
+	log.Info("cache len:", len(db.cache.queue))
+	l = len(db.cache.queue) /// TODO: Check why this randomly fails
 	if l != 0 {
 		t.Error("cache should be empty, but is :", l)
 	}
-	if db.Close() != nil {
+	if err = db.Close(); err != nil {
 		t.Error("error closing db :", err)
 	}
 }

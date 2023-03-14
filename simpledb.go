@@ -50,6 +50,10 @@ type SimpleDb[T any] struct {
 
 // creates a new database or opens an existing one
 func NewDb[T any](filename string, cacheSize uint32) (db *SimpleDb[T], err error) {
+	var mtx sync.Mutex
+	mtx.Lock()
+	defer mtx.Unlock()
+
 	dbDataFile := filepath.Clean(filename)
 	dir, file := filepath.Split(dbDataFile)
 	dataFilePath := filepath.Join(dir, dbPath, file+dbExt)
@@ -84,6 +88,10 @@ func NewDb[T any](filename string, cacheSize uint32) (db *SimpleDb[T], err error
 
 // Removes the database file from disk, permanently and irreversibly
 func Destroy(dbName string) (err error) {
+	var mtx sync.Mutex
+	mtx.Lock()
+	defer mtx.Unlock()
+
 	if err = os.Remove(dbName); err != nil {
 		return fmt.Errorf("error removing datafile: %w", err)
 	}
@@ -211,6 +219,10 @@ func (db *SimpleDb[T]) Get(searchedKey []byte) (val *T, err error) {
 
 // Updates the value for the given key
 func (db *SimpleDb[T]) Update(keyToUpdate []byte, value *T) (id ID, err error) { // TODO: remove ID from return values, as it's an internal id
+	var mtx sync.Mutex
+	mtx.Lock()
+	defer mtx.Unlock()
+
 	keyHash := getHash([]byte(keyToUpdate))
 
 	idCandidates, ok := db.keyMap[keyHash]
@@ -234,6 +246,9 @@ func (db *SimpleDb[T]) Update(keyToUpdate []byte, value *T) (id ID, err error) {
 
 // Marks item with a given Id for deletion, internal function, may be used for testing/benchmarking
 func (db *SimpleDb[T]) deleteById(id ID, keyHash Hash) error {
+	var mtx sync.Mutex
+	mtx.Lock()
+	defer mtx.Unlock()
 
 	if !db.has(id) {
 		return &NotFoundError{id: id}
@@ -294,35 +309,40 @@ func (db *SimpleDb[T]) Delete(aKey []byte) (err error) {
 
 // closes the database and performs necessary housekeeping
 func (db *SimpleDb[T]) Close() (err error) {
-	const tmpFile = dbPath + "temp.sdb"
 	var mtx sync.Mutex
-	var bytesWritten uint64
-
 	mtx.Lock()
 	defer mtx.Unlock()
 
-	db.fileHandle.Close()
+	var bytesWritten uint64
+
+	var tmpFile = filepath.Join(dbPath, "temp.sdb")
+
+	if err = db.fileHandle.Close(); err != nil {
+		return fmt.Errorf("closing: %w", err)
+	}
+
 	if len(db.deleted) == 0 {
 		return nil
 	}
 
 	if bytesWritten, err = db.copyOmittingDeleted(tmpFile); err != nil {
-		return err
+		return fmt.Errorf("copyomitting: %w", err)
 	}
 
 	// substitute the temp file for the datbase file
 	if err := os.Remove(db.filePath); err != nil {
-		return err
+		return fmt.Errorf("remove db file: %w", err)
 	}
 
 	if bytesWritten == 0 {
 		if err := os.Remove(tmpFile); err != nil {
-			return err
+			return fmt.Errorf("remove tmp file: %w", err)
 		}
 		return nil
 	}
+
 	if err := os.Rename(tmpFile, db.filePath); err != nil {
-		return err
+		return fmt.Errorf("rename tmp to db file: %w", err)
 	}
 
 	db.cache.cleanup()
@@ -352,6 +372,10 @@ func (db *SimpleDb[T]) copyOmittingDeleted(tmpFile string) (bytesWritten uint64,
 	if err != nil {
 		return 0, err
 	}
+	defer func() {
+		src.Close()
+		dest.Close()
+	}()
 loop:
 	for {
 		if _, err = src.Seek(curpos, 0); err != nil {
@@ -380,8 +404,6 @@ loop:
 		}
 		curpos += int64(header.Length)
 	}
-	src.Close()
-	dest.Close()
 
 	return
 }

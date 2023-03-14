@@ -53,13 +53,13 @@ The following operations are supported as of now:
 
 | Operation  | Description  |
 | ---------- | :---------------------------------------------------------------- |
-| Open       | opens the database|
+| NewDb      | creates the database if it does not exist or opens if it does |
 | Append     | appends data item to the database|
 | Update     | updates data item with the given key |
 | Get        | gets data item from the database by key |
 | Delete     | deletes data item by id |
 | Close      | closes the database|
-| Destroy    | closes and deletes all database files (useful for starting tests) |
+| Destroy    | deletes  database files (requires full path name to db.file for security) |
 
 I wrote this package try some of the following go fetures out:
 
@@ -70,3 +70,4 @@ I wrote this package try some of the following go fetures out:
 - simple data structures (maps, queue)
 - profiling 
 - modules
+- first class functions
