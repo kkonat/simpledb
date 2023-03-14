@@ -1,7 +1,6 @@
 package simpledb
 
 import (
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"hash/crc32"
@@ -118,7 +117,7 @@ func (db *SimpleDb[T]) Append(key []byte, value *T) (id ID, err error) {
 	block := NewBlock(id, timestamp, key, payload) // and then the payload
 
 	// write whole block  at once
-	if bytesWritten, err := db.fileHandle.Write(block.getBytes()); err != nil || uint32(bytesWritten) != block.Length {
+	if bytesWritten, err := block.write(db.fileHandle); err != nil || uint32(bytesWritten) != block.Length {
 		return 0, fmt.Errorf("error writing datafile: %w", err)
 	}
 
@@ -126,6 +125,7 @@ func (db *SimpleDb[T]) Append(key []byte, value *T) (id ID, err error) {
 	db.currentOffset += uint64(block.Length) // update current offset
 	db.ItemsCount++                          // update db capacity
 
+	db.keyMap[block.KeyHash] = append(db.keyMap[block.KeyHash], block.Id)
 	// Cache the newly added item
 	db.cache.addItem(&cacheItem[T]{
 		ID:       ID(block.Id),
@@ -166,11 +166,12 @@ func (db *SimpleDb[T]) getById(id ID) (key []byte, value *T, err error) {
 	seek := db.blockLen(id)
 
 	db.fileHandle.Seek(int64(seek), io.SeekStart) // move to the right position in the file
-	var blocksize uint32
-	if err = binary.Read(db.fileHandle, binary.LittleEndian, &blocksize); err != nil { // read OffsL bytes
+	header := blockHeader{}
+
+	if err = header.read(db.fileHandle); err != nil { // read OffsL bytes
 		return nil, nil, err
 	}
-	buff := make([]byte, blocksize)
+	buff := make([]byte, header.Length)
 
 	db.fileHandle.Seek(int64(seek), io.SeekStart)
 	if _, err = db.fileHandle.Read(buff); err != nil {
@@ -218,7 +219,7 @@ func (db *SimpleDb[T]) Get(searchedKey []byte) (val *T, err error) {
 }
 
 // Updates the value for the given key
-func (db *SimpleDb[T]) Update(keyToUpdate []byte, value *T) (id ID, err error) { // TODO: remove ID from return values, as it's an internal id
+func (db *SimpleDb[T]) Update(keyToUpdate []byte, value *T) (err error) {
 	var mtx sync.Mutex
 	mtx.Lock()
 	defer mtx.Unlock()
@@ -227,7 +228,7 @@ func (db *SimpleDb[T]) Update(keyToUpdate []byte, value *T) (id ID, err error) {
 
 	idCandidates, ok := db.keyMap[keyHash]
 	if !ok {
-		return 0, &NotFoundError{}
+		return &NotFoundError{}
 	}
 
 	// find and delete old key,value pair
@@ -240,8 +241,8 @@ func (db *SimpleDb[T]) Update(keyToUpdate []byte, value *T) (id ID, err error) {
 	}
 
 	// add themodified key,value pair as a new db Item
-	id, err = db.Append(keyToUpdate, value)
-	return id, err
+	_, err = db.Append(keyToUpdate, value)
+	return err
 }
 
 // Marks item with a given Id for deletion, internal function, may be used for testing/benchmarking
@@ -264,11 +265,7 @@ func (db *SimpleDb[T]) deleteById(id ID, keyHash Hash) error {
 	// remove the item from cache, if it is there
 	if cachedItem, ok := db.cache.checkaAndGetItem(id); ok {
 		db.cache.removeItem(cachedItem.ID)
-	} //else {
-	// TODO: debug this - sometimes, when testing execution falls into this "else" branch,
-	// even if the object is in fact in the cache
-	// log.Info(fmt.Sprintf("why %d ", db.cache.data[id].ID))
-	//}
+	}
 
 	// remove the item from keyMap
 
@@ -381,7 +378,7 @@ loop:
 		if _, err = src.Seek(curpos, 0); err != nil {
 			return 0, err
 		}
-		if err = binary.Read(src, binary.LittleEndian, &header); err != nil {
+		if err = header.read(src); err != nil {
 			if errors.Is(err, io.EOF) {
 				err = nil
 				break loop
@@ -431,7 +428,7 @@ loop:
 		if _, err = db.fileHandle.Seek(int64(curpos), 0); err != nil {
 			return err
 		}
-		if err = binary.Read(db.fileHandle, binary.LittleEndian, &header); err != nil {
+		if err = header.read(db.fileHandle); err != nil {
 			if errors.Is(err, io.EOF) {
 				break loop
 			} else {

@@ -116,17 +116,15 @@ func TestBasicFunctionality(t *testing.T) {
 		t.Error("error getting by key", err)
 	}
 	pers.Age = 123
-	id1, err = db2.Update([]byte("Person1"), pers)
+	err = db2.Update([]byte("Person1"), pers)
 	if err != nil {
 		t.Error("update failed")
 	}
-	key, val, err := db2.getById(id1)
+	val, err := db2.Get([]byte("Person1"))
 	if err != nil {
 		t.Error("problem getting updated")
 	}
-	if string(key) != "Person1" {
-		t.Error("Wrong key")
-	}
+
 	if val.Age != 123 {
 		t.Error("Wrong value")
 	}
@@ -213,7 +211,7 @@ func TestDeleteLogic(t *testing.T) {
 		t.Error("there should be ", N, " deleted")
 	}
 	log.Info("cache len:", len(db.cache.queue))
-	l = len(db.cache.queue) /// TODO: Check why this randomly fails
+	l = len(db.cache.queue) /// TODO: If tests are executed concurrently it sometimes fails
 	if l != 0 {
 		t.Error("cache should be empty, but is :", l)
 	}
