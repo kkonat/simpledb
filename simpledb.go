@@ -2,7 +2,6 @@ package simpledb
 
 import (
 	"errors"
-	"fmt"
 	"hash/crc32"
 	"io"
 	"math"
@@ -31,7 +30,7 @@ type Key []byte                 // keys are bytes, since strings would be a wast
 type Hash uint32                // no need for larger hashes for now
 type ID uint32                  // this is small database, so let's assume it may hold "only" 4 billion k,v pairs
 type BlockOffsets map[ID]uint64 // blocks may be up to 4GB?
-type KeyHashes map[Hash][]ID
+type HashIDs map[Hash][]ID
 type DeleteFlags map[ID]struct{}
 
 type SimpleDb[T any] struct {
@@ -41,10 +40,10 @@ type SimpleDb[T any] struct {
 	cache         *cache[T]
 	ItemsCount    uint64
 	currentOffset uint64 // as blocks may be up to  4GB long, the file length/index must be at least uint64
-	highestId     ID
+	maxId         ID
 	deleted       DeleteFlags
 	blockOffsets  BlockOffsets
-	keyMap        KeyHashes
+	keyMap        HashIDs
 	mtx           sync.Mutex
 }
 
@@ -61,7 +60,7 @@ func Open[T any](filename string, cacheSize uint32) (db *SimpleDb[T], err error)
 	}
 
 	db.cache = newCache[T](cacheSize)
-	db.keyMap = make(KeyHashes, 0)
+	db.keyMap = make(HashIDs, 0)
 	db.deleted = make(DeleteFlags)
 	db.filePath = dataFilePath
 
@@ -70,17 +69,16 @@ func Open[T any](filename string, cacheSize uint32) (db *SimpleDb[T], err error)
 	if _, err = os.Stat(dataFilePath); err == nil {
 		// if db file exists
 		if db.fileHandle, err = openFile(dataFilePath); err != nil {
-			return nil, fmt.Errorf("error opening database file: %w", err)
+			return nil, &DbGeneralError{err: "open"}
 		}
-		if err = db.read(); err != nil {
-			return nil, fmt.Errorf("error rebuilding offsets: %w", err)
+		if err = db.loadDb(); err != nil {
+			return nil, &DbInternalError{oper: "reading db", err: err}
 		}
 	} else {
 		// if not, initialize empty db
 		db.blockOffsets = make(BlockOffsets)
 		db.fileHandle, err = openFile(dataFilePath)
 	}
-
 	return
 }
 
@@ -91,7 +89,7 @@ func (db *SimpleDb[T]) Destroy() (err error) {
 	defer db.mtx.Unlock()
 	db.fileHandle.Close()
 	if err = os.Remove(db.filePath); err != nil {
-		return fmt.Errorf("error removing datafile: %w", err)
+		return &DbInternalError{oper: "removing datafile", err: err}
 	}
 	return
 }
@@ -100,13 +98,14 @@ func (db *SimpleDb[T]) Destroy() (err error) {
 func (db *SimpleDb[T]) Append(key []byte, value *T) (id ID, err error) {
 	db.mtx.Lock()
 	defer db.mtx.Unlock()
-	return db.appendUnlocked(key, value)
+	return db.appendWOLock(key, value)
 }
-func (db *SimpleDb[T]) appendUnlocked(key []byte, value *T) (id ID, err error) {
+
+func (db *SimpleDb[T]) appendWOLock(key []byte, value *T) (id ID, err error) {
 
 	var payload []byte
 	if payload, err = borsh.Serialize(value); err != nil {
-		return 0, fmt.Errorf("error serializing: %w", err)
+		return 0, &DbInternalError{oper: "serializing", err: err}
 	}
 	if len(payload) > math.MaxUint32 { // payload must not be too large, ha ha
 		panic("payload too large")
@@ -119,7 +118,7 @@ func (db *SimpleDb[T]) appendUnlocked(key []byte, value *T) (id ID, err error) {
 
 	// write whole block  at once
 	if bytesWritten, err := block.write(db.fileHandle); err != nil || uint32(bytesWritten) != block.Length {
-		return 0, fmt.Errorf("error writing datafile: %w", err)
+		return 0, &DbInternalError{oper: "writing block", err: err}
 	}
 
 	db.blockOffsets[id] = db.currentOffset   // add to offsets map
@@ -182,7 +181,7 @@ func (db *SimpleDb[T]) getById(id ID) (key []byte, value *T, err error) {
 	value = new(T)
 	// unmarshall payload
 	if err := borsh.Deserialize(&value, block.value); err != nil {
-		return nil, nil, fmt.Errorf("error deserializing: %w", err)
+		return nil, nil, &DbInternalError{oper: "deserializing", err: err}
 	}
 
 	// create db Item for caching
@@ -241,7 +240,7 @@ func (db *SimpleDb[T]) Update(keyToUpdate []byte, value *T) (err error) {
 	}
 
 	// add themodified key,value pair as a new db Item
-	_, err = db.appendUnlocked(keyToUpdate, value)
+	_, err = db.appendWOLock(keyToUpdate, value)
 	return err
 }
 
@@ -254,7 +253,7 @@ func (db *SimpleDb[T]) deleteById(id ID, keyHash Hash) error {
 
 	//  TODO: remove this check in future, permit multiple deletes, now convenient for testing
 	if _, ok := db.deleted[id]; ok {
-		return errors.New("item already deleted") // TODO: fail gracefully here instead of error
+		return &DbGeneralError{err: "item already deleted"} // TODO: fail gracefully here instead of error
 	} else {
 		db.deleted[id] = struct{}{} // set map to empty value as a flag indicating the item is to be deleted
 	}
@@ -314,7 +313,7 @@ func (db *SimpleDb[T]) Close() (err error) {
 	var tmpFile = filepath.Join(dbPath, "temp.sdb")
 
 	if err = db.fileHandle.Close(); err != nil {
-		return fmt.Errorf("closing: %w", err)
+		return &DbInternalError{oper: "closing: %w", err: err}
 	}
 
 	if len(db.deleted) == 0 {
@@ -322,23 +321,23 @@ func (db *SimpleDb[T]) Close() (err error) {
 	}
 
 	if bytesWritten, err = db.copyOmittingDeleted(tmpFile); err != nil {
-		return fmt.Errorf("copyomitting: %w", err)
+		return &DbInternalError{oper: "copyomitting: %w", err: err}
 	}
 
 	// substitute the temp file for the datbase file
 	if err := os.Remove(db.filePath); err != nil {
-		return fmt.Errorf("remove db file: %w", err)
+		return &DbInternalError{oper: "removing db file: %w", err: err}
 	}
 
 	if bytesWritten == 0 {
 		if err := os.Remove(tmpFile); err != nil {
-			return fmt.Errorf("remove tmp file: %w", err)
+			return &DbInternalError{oper: "removing tmp file: %w", err: err}
 		}
 		return nil
 	}
 
 	if err := os.Rename(tmpFile, db.filePath); err != nil {
-		return fmt.Errorf("rename tmp to db file: %w", err)
+		return &DbInternalError{oper: "renaming tmp to db file: %w", err: err}
 	}
 
 	db.cache.cleanup()
@@ -406,13 +405,13 @@ loop:
 
 // generates new object id, now it's sequential, later maybe change to guid or what
 func (db *SimpleDb[T]) genNewId() (id ID) {
-	id = ID(db.highestId)
-	db.highestId++
+	id = ID(db.maxId)
+	db.maxId++
 	return
 }
 
 // rebuilds internal database structure: offsets map and key hash map
-func (db *SimpleDb[T]) read() (err error) {
+func (db *SimpleDb[T]) loadDb() (err error) {
 	var (
 		curpos uint64
 		lastId ID
@@ -435,17 +434,19 @@ loop:
 			}
 		}
 
-		db.blockOffsets[ID(header.Id)] = curpos                                      // updat offsets map
-		db.keyMap[header.KeyHash] = append(db.keyMap[header.KeyHash], ID(header.Id)) // update kayhashmap
-		curpos += uint64(header.Length)                                              // update current position in the file
-		if ID(header.Id) > lastId {                                                  // keep track of the last id
+		db.blockOffsets[ID(header.Id)] = curpos // updat offsets map
+		db.keyMap[header.KeyHash] = append(     // update kayhashmap
+			db.keyMap[header.KeyHash],
+			ID(header.Id))
+		curpos += uint64(header.Length) // update current position in the file
+		if ID(header.Id) > lastId {     // keep track of the last id
 			lastId = ID(header.Id)
 		}
 		count++
 	}
 	db.currentOffset = curpos // update database parameters
 	db.ItemsCount = count
-	db.highestId = lastId
+	db.maxId = lastId
 	return nil
 }
 

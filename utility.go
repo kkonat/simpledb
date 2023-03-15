@@ -57,7 +57,7 @@ func genRandomSequence(N int) []int {
 	}
 	const sentinel = math.MaxInt
 	var seq = make([]int, N)
-	for i := range seq {
+	for i := 0; i < len(seq); i++ {
 		seq[i] = sentinel
 	}
 	for i := 0; i < N; i++ {
@@ -65,12 +65,12 @@ func genRandomSequence(N int) []int {
 		if seq[p] == sentinel {
 			seq[p] = i
 		} else {
-			for ; p < N && seq[p] != 0; p++ {
+			for ; p < N && seq[p] != sentinel; p++ {
 			}
 			if p < N {
 				seq[p] = i
 			} else {
-				for p = 1; p < N && seq[p] != 0; p++ {
+				for p = 0; p < N && seq[p] != sentinel; p++ {
 				}
 				if p < N {
 					seq[p] = i

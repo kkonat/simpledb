@@ -29,7 +29,7 @@ var testData []Person = []Person{
 
 func TestDestroy(t *testing.T) {
 	const CacheSize = 0
-	db, err := Open[Person]("testdb", CacheSize)
+	db, err := Open[Person]("testDestroy", CacheSize)
 	if err != nil {
 		t.Errorf("failed to create database: %v", err)
 	}
@@ -44,12 +44,12 @@ func TestBasicFunctionality(t *testing.T) {
 	const CacheSize = 100
 
 	var err error
-	db1, _ := Open[Person]("testdb", 0)
+	db1, _ := Open[Person]("testBasicFunx", 0)
 	err = db1.Destroy()
 	if err != nil {
 		t.Errorf("failed to destroy database: %v", err)
 	}
-	db1, err = Open[Person]("testdb", CacheSize)
+	db1, err = Open[Person]("testBasicFunx", CacheSize)
 	if err != nil {
 		t.Errorf("failed to create database: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestBasicFunctionality(t *testing.T) {
 	}
 	db1.Close()
 
-	db2, err := Open[Person]("testdb", CacheSize)
+	db2, err := Open[Person]("testBasicFunx", CacheSize)
 	if err != nil {
 		t.Errorf("failed to open database: %v", err)
 	}
@@ -143,9 +143,9 @@ func TestCache(t *testing.T) {
 	)
 	const CacheSize = 100
 
-	db, _ := Open[benchmarkData]("benchmark", CacheSize)
+	db, _ := Open[benchmarkData]("benchmarkCache", CacheSize)
 	db.Destroy()
-	db, _ = Open[benchmarkData]("benchmark", CacheSize)
+	db, _ = Open[benchmarkData]("benchmarkCache", CacheSize)
 
 	// gen 2 x times the cache capacity
 	// so the expected hitrate is 50%
@@ -159,7 +159,7 @@ func TestCache(t *testing.T) {
 	}
 	db.Close()
 
-	db, _ = Open[benchmarkData]("benchmark", CacheSize)
+	db, _ = Open[benchmarkData]("benchmarkCache", CacheSize)
 	for n := 0; n < numElements; n++ {
 		rndNo := ID(rand.Intn(numElements))
 		if _, d, err = db.getById(rndNo); err != nil {
@@ -184,10 +184,10 @@ func TestDeleteLogic(t *testing.T) {
 	seq := genRandomSequence(N) // shuffle Item IDs to delete them randomly
 	hashes := make([]Hash, N)
 
-	db, _ := Open[benchmarkData]("benchmark", CacheSize)
+	db, _ := Open[benchmarkData]("delLogic", CacheSize)
 	db.Destroy()
 
-	db, _ = Open[benchmarkData]("benchmark", CacheSize)
+	db, _ = Open[benchmarkData]("v", CacheSize)
 
 	// add
 	for n := 0; n < N; n++ {
