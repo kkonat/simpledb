@@ -15,8 +15,8 @@ import (
 )
 
 const (
-	dbPath = "./db"
-	dbExt  = ".sdb"
+	DbPath = "./db"
+	DbExt  = ".sdb"
 )
 
 var crc32table *crc32.Table
@@ -49,26 +49,23 @@ type SimpleDb[T any] struct {
 
 // creates a new database or opens an existing one
 func Open[T any](filename string, cacheSize uint32) (db *SimpleDb[T], err error) {
-	db = &SimpleDb[T]{}
 
-	dbDataFile := filepath.Clean(filename)
-	dir, file := filepath.Split(dbDataFile)
-	dataFilePath := filepath.Join(dir, dbPath, file+dbExt)
-
-	if _, err = os.Stat(dbPath); err != nil {
-		os.Mkdir(dbPath, 0700)
+	db = &SimpleDb[T]{
+		filePath: getFilepath(filename),
+		cache:    newCache[T](cacheSize),
+		keyMap:   make(HashIDs, 0),
+		deleted:  make(DeleteFlags),
 	}
-
-	db.cache = newCache[T](cacheSize)
-	db.keyMap = make(HashIDs, 0)
-	db.deleted = make(DeleteFlags)
-	db.filePath = dataFilePath
-
 	db.mtx.Lock()
 	defer db.mtx.Unlock()
-	if _, err = os.Stat(dataFilePath); err == nil {
+
+	if _, err = os.Stat(DbPath); err != nil {
+		os.Mkdir(DbPath, 0700)
+	}
+
+	if _, err = os.Stat(db.filePath); err == nil {
 		// if db file exists
-		if db.fileHandle, err = openFile(dataFilePath); err != nil {
+		if db.fileHandle, err = openFile(db.filePath); err != nil {
 			return nil, &DbGeneralError{err: "open"}
 		}
 		if err = db.loadDb(); err != nil {
@@ -77,12 +74,12 @@ func Open[T any](filename string, cacheSize uint32) (db *SimpleDb[T], err error)
 	} else {
 		// if not, initialize empty db
 		db.blockOffsets = make(BlockOffsets)
-		db.fileHandle, err = openFile(dataFilePath)
+		db.fileHandle, err = openFile(db.filePath)
 	}
 	return
 }
 
-// Removes the database file from disk, permanently and irreversibly
+// Closes db and Removes the database file from disk, permanently and irreversibly
 func (db *SimpleDb[T]) Destroy() (err error) {
 
 	db.mtx.Lock()
@@ -92,6 +89,12 @@ func (db *SimpleDb[T]) Destroy() (err error) {
 		return &DbInternalError{oper: "removing datafile", err: err}
 	}
 	return
+}
+
+// Forcefully deletes database file from disk
+func DeleteDbFile(file string) error {
+	path := getFilepath(file)
+	return os.Remove(path)
 }
 
 // Appends a key, value pair to the database, returns added block id, and error, if any
@@ -301,6 +304,7 @@ func (db *SimpleDb[T]) Delete(aKey []byte) (err error) {
 		key, _, err = db.getById(id)
 		if err == nil && keysEqual(key, aKey) {
 			db.deleteById(id, keyHash)
+			return nil
 		}
 	}
 	return &NotFoundError{id: id}
@@ -313,7 +317,7 @@ func (db *SimpleDb[T]) Close() (err error) {
 
 	var bytesWritten uint64
 
-	var tmpFile = filepath.Join(dbPath, "temp.sdb")
+	var tmpFile = filepath.Join(DbPath, "temp.sdb")
 
 	if err = db.fileHandle.Close(); err != nil {
 		return &DbInternalError{oper: "closing: %w", err: err}
@@ -396,14 +400,15 @@ loop:
 				return 0, err
 			}
 			if n, err := dest.Write(buff); err != nil {
+				return 0, err
+			} else {
 				bytesWritten += uint64(n)
-				return bytesWritten, err
+
 			}
 		}
 		curpos += int64(header.Length)
 	}
-
-	return
+	return bytesWritten, err
 }
 
 // generates new object id, now it's sequential, later maybe change to guid or what
@@ -449,16 +454,8 @@ loop:
 	}
 	db.currentOffset = curpos // update database parameters
 	db.ItemsCount = count
-	db.maxId = lastId
+	db.maxId = lastId + 1
 	return nil
-}
-
-// helper functions
-
-// opens the file, used for keeping track of the open/rw/create mode
-func openFile(path string) (file *os.File, err error) {
-	file, err = os.OpenFile(path, os.O_APPEND|os.O_RDWR|os.O_CREATE, 0600)
-	return
 }
 
 // checks if the database has an element with the given ID

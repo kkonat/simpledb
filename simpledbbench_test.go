@@ -23,12 +23,11 @@ func BenchmarkCache(b *testing.B) {
 		d   *benchmarkData
 		err error
 	)
-	var CacheSize = uint32(b.N / 2)
+	var CacheSize = uint32(b.N)
 	var numElements = uint32(b.N)
 
+	DeleteDbFile("benchmark")
 	db, _ := Open[benchmarkData]("benchmark", CacheSize)
-	db.Destroy()
-	db, _ = Open[benchmarkData]("benchmark", CacheSize)
 
 	reference := make(map[ID]string)
 	for n := 0; n < b.N; n++ {
@@ -46,4 +45,65 @@ func BenchmarkCache(b *testing.B) {
 		}
 	}
 	log.Info("-> ", b.N, " iterations. Cache Hit rate: ", db.cache.GetHitRate(), " %")
+}
+
+func BenchmarkDeleteAndUpdate(b *testing.B) {
+	var (
+		value *benchmarkData
+		err   error
+	)
+
+	var N = 1 + b.N
+	var CacheSize = 1 + uint32(N/2)
+	log.Info("N=", N)
+
+	elements := make([]int, N)
+
+	DeleteDbFile("delLogic")
+
+	db, _ := Open[benchmarkData]("delLogic", CacheSize)
+
+	// add
+
+	for n := 0; n < N; n++ {
+		value = &benchmarkData{Str: fmt.Sprintf("value%d ", n)}
+		key := []byte(fmt.Sprintf("Item%d", n))
+		elements[n] = n
+		db.Append(key, value)
+	}
+	db.Close()
+
+	// modify half
+	db, _ = Open[benchmarkData]("delLogic", CacheSize)
+	for n := 0; n < N/2; n++ {
+		x := rand.Intn(N)
+		key := []byte(fmt.Sprintf("Item%d", x))
+
+		value, err := db.Get(key)
+		if err != nil {
+			b.Error("should be able to get :", string(key))
+		}
+		// log.Info(x, ":", string(key), ":", val.Str)
+		value.Value = 0
+		value.Str += " mod"
+		db.Update(key, value)
+	}
+	db.Close()
+
+	// delete randomly
+	db, _ = Open[benchmarkData]("delLogic", CacheSize)
+	for n := 0; n < N; n++ {
+		which := rand.Intn(len(elements))
+		elNo := elements[which]
+		key := []byte(fmt.Sprintf("Item%d", elNo))
+		err = db.Delete(key)
+		if err != nil {
+			b.Errorf("el:%d, key:%s", elNo, string(key))
+			b.Error(fmt.Errorf("err delete %w", err))
+			return
+		}
+		elements[which] = elements[len(elements)-1]
+		elements = elements[:len(elements)-1]
+	}
+	db.Close()
 }

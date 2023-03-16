@@ -5,7 +5,23 @@ import (
 	"hash/crc32"
 	"math"
 	"math/rand"
+	"os"
+	"path/filepath"
 )
+
+// processes relative dirs and returns final filepath
+func getFilepath(filename string) string {
+	dbDataFile := filepath.Clean(filename)
+	dir, file := filepath.Split(dbDataFile)
+	dataFilePath := filepath.Join(dir, DbPath, file+DbExt)
+	return dataFilePath
+}
+
+// opens the file, used for keeping track of the open/rw/create mode
+func openFile(path string) (file *os.File, err error) {
+	file, err = os.OpenFile(path, os.O_APPEND|os.O_RDWR|os.O_CREATE, 0600)
+	return
+}
 
 // compares two keys provided as []byte slices
 func keysEqual(a, b []byte) bool {
@@ -41,7 +57,9 @@ func getHash(data []byte) Hash {
 // or for fun, let's try this function
 // http://www.azillionmonkeys.com/qed/hash.html
 
-var letterRunes = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+var (
+	letterRunes = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+)
 
 func getRandomLetters(n int) string {
 	b := make([]rune, n)
