@@ -150,6 +150,7 @@ func (db *SimpleDb[T]) getById(id ID) (key []byte, value *T, err error) {
 	// get from cache if cached
 	if object, ok := db.cache.checkaAndGetItem(id); ok {
 		if _, ok := db.deleted[id]; !ok { // if in cache and not deleted
+			db.cache.touch(id)
 			return object.Key, object.Value, nil
 		}
 	}
@@ -241,6 +242,8 @@ func (db *SimpleDb[T]) Update(keyToUpdate []byte, value *T) (err error) {
 
 	// add themodified key,value pair as a new db Item
 	_, err = db.appendWOLock(keyToUpdate, value)
+
+	// Update deletes the old and addsthe new item do db, and to the cache so it's automatically cached, and the freshest in the cache
 	return err
 }
 

@@ -180,7 +180,6 @@ func TestDeleteLogic(t *testing.T) {
 	const CacheSize = 100
 	const N = 200
 
-	log.Info("Testing N = ", N)
 	seq := genRandomSequence(N) // shuffle Item IDs to delete them randomly
 	hashes := make([]Hash, N)
 
@@ -205,7 +204,7 @@ func TestDeleteLogic(t *testing.T) {
 	}
 
 	// delete last on
-	log.Info("cache len:", len(db.cache.queue))
+
 	err = db.deleteById(0, hashes[0])
 	if err == nil {
 		t.Error("should not be able to delete")
@@ -216,7 +215,6 @@ func TestDeleteLogic(t *testing.T) {
 	if l != N {
 		t.Error("there should be ", N, " deleted")
 	}
-	log.Info("cache len:", len(db.cache.queue))
 	l = len(db.cache.queue) /// TODO: If tests are executed concurrently it sometimes fails
 	if l != 0 {
 		t.Error("cache should be empty, but is :", l)

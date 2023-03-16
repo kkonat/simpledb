@@ -23,15 +23,15 @@ func BenchmarkCache(b *testing.B) {
 		d   *benchmarkData
 		err error
 	)
-	const CacheSize = 100
-	const numElements = 200
+	var CacheSize = uint32(b.N / 2)
+	var numElements = uint32(b.N)
 
 	db, _ := Open[benchmarkData]("benchmark", CacheSize)
 	db.Destroy()
 	db, _ = Open[benchmarkData]("benchmark", CacheSize)
 
 	reference := make(map[ID]string)
-	for n := 0; n < numElements; n++ {
+	for n := 0; n < b.N; n++ {
 		d = NewBenchmarkData(n)
 		db.Append([]byte(fmt.Sprintf("Item%d", n)), d)
 		reference[ID(n)] = d.Str
@@ -40,7 +40,7 @@ func BenchmarkCache(b *testing.B) {
 
 	db, _ = Open[benchmarkData]("benchmark", CacheSize)
 	for n := 0; n < b.N; n++ {
-		rndNo := ID(rand.Intn(numElements))
+		rndNo := ID(rand.Intn(int(numElements)))
 		if _, _, err = db.getById(rndNo); err != nil {
 			b.Error("get failed")
 		}

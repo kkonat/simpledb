@@ -25,7 +25,7 @@ type cacheItem[T any] struct {
 func newCache[T any](CacheSize uint32) (c *cache[T]) {
 	c = &cache[T]{}
 
-	if CacheSize == 0 { // if no cache, set dummy functions, to eluminate frequent  constant if cache == null checking
+	if CacheSize == 0 { // if no cache is to be created, set dummy functions, to eliminate frequent `if cache == nil`` checks
 		c.addItem = func(item *cacheItem[T]) {}
 		c.checkaAndGetItem = func(id ID) (item *cacheItem[T], ok bool) { return nil, false }
 		c.removeItem = func(id ID) (ok bool) { return true }
@@ -33,6 +33,7 @@ func newCache[T any](CacheSize uint32) (c *cache[T]) {
 		c.addItem = c.addItemCache
 		c.checkaAndGetItem = c.checkaAndGetItemCache
 		c.removeItem = c.removeItemCache
+		// only create the map and slice, if cache is actually created
 		c.size = CacheSize
 		c.data = make(map[ID]*cacheItem[T])
 		c.queue = make([]ID, 0)
@@ -40,6 +41,7 @@ func newCache[T any](CacheSize uint32) (c *cache[T]) {
 	return
 }
 
+// cleans up the cache
 func (c *cache[T]) cleanup() {
 
 	// mark unused for GC
@@ -50,6 +52,7 @@ func (c *cache[T]) cleanup() {
 	c.queue = nil
 }
 
+// adds new item to the cache and drops the oldest one
 func (c *cache[T]) addItemCache(item *cacheItem[T]) {
 	if uint32(len(c.queue)) == c.size {
 		delete(c.data, c.queue[0])
@@ -59,6 +62,7 @@ func (c *cache[T]) addItemCache(item *cacheItem[T]) {
 	c.queue = append(c.queue, item.ID)
 }
 
+// checks if the item is in the cache and if so, returns its value
 func (c *cache[T]) checkaAndGetItemCache(id ID) (item *cacheItem[T], ok bool) {
 	c.statistics.requests++
 	if item, ok = c.data[id]; ok {
@@ -67,6 +71,22 @@ func (c *cache[T]) checkaAndGetItemCache(id ID) (item *cacheItem[T], ok bool) {
 	return
 }
 
+// touches an element in the queue and marks it as the one used most recently (i.e. puts it at the end of the queue)
+func (c *cache[T]) touch(id ID) {
+	if len(c.queue) < 2 {
+		return
+	}
+	// find that ID in the queue
+	for at, found := range c.queue {
+		if found == id {
+			c.queue = append(c.queue[:at], c.queue[at+1:]...)
+			c.queue = append(c.queue, id)
+			return
+		}
+	}
+}
+
+// removes an item with given id from cache
 func (c *cache[T]) removeItemCache(id ID) (ok bool) {
 	delete(c.data, id)
 
@@ -81,6 +101,7 @@ func (c *cache[T]) removeItemCache(id ID) (ok bool) {
 	return
 }
 
+// Gets rudimentary cache stats
 func (m cache[T]) GetHitRate() float64 {
 	if m.statistics.requests > 0 {
 		return float64(m.statistics.hits) / float64(m.statistics.requests) * 100
