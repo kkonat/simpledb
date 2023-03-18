@@ -9,7 +9,7 @@ import (
 )
 
 func TestNew(t *testing.T) {
-	d, err := Open[Person]("testdb")
+	d, err := Open[Person]("testdb", 0)
 	if err != nil {
 		t.Errorf("failed to create database: %v", err)
 	}
@@ -27,22 +27,26 @@ var testData []Person = []Person{
 	{"Ulrika", "Van der Klompfer", 666},
 }
 
-func TestKill(t *testing.T) {
-	db1, err := Open[Person]("testdb")
+func TestDestroy(t *testing.T) {
+	const CacheSize = 0
+	db, err := Open[Person]("testDestroy", CacheSize)
 	if err != nil {
 		t.Errorf("failed to create database: %v", err)
 	}
-	err = Close(db1, "testdb")
+	db.Append([]byte("Person1"), &testData[0])
+	db.Close()
+	err = db.Destroy()
 	if err != nil {
 		t.Errorf("failed to kill database: %v", err)
 	}
 }
 func TestBasicFunctionality(t *testing.T) {
-	db1, _ := Open[Person]("testdb")
-	Close(db1, "testdb")
+	const CacheSize = 100
 
 	var err error
-	db1, err = Open[Person]("testdb")
+	DeleteDbFile("testBasicFunx")
+
+	db1, err := Open[Person]("testBasicFunx", CacheSize)
 	if err != nil {
 		t.Errorf("failed to create database: %v", err)
 	}
@@ -63,66 +67,92 @@ func TestBasicFunctionality(t *testing.T) {
 	}
 	db1.Close()
 
-	db2, err := Open[Person]("testdb")
+	// open another db from the same file
+	db2, err := Open[Person]("testBasicFunx", CacheSize)
 	if err != nil {
 		t.Errorf("failed to open database: %v", err)
 	}
+	// test internals
 	if db1.currentOffset != db2.currentOffset {
 		t.Error("different offsets")
 	}
-	if db1.capacity != db2.capacity {
+	if db1.ItemsCount != db2.ItemsCount {
 		t.Error("differenc counters")
 	}
-	_, _, err = db2.GetById(id2)
+	// test get the same item
+	_, _, err = db2.getById(id2)
 	if err != nil {
 		t.Error("error getting item ", id2, err)
 	}
+	// test get the same key
 	pers, err := db2.Get([]byte("Person1"))
 	if err != nil {
 		t.Error("error getting by key", err)
-
 	}
 	if pers.Age != testData[id1].Age {
 		t.Error("Wrong data")
 	}
-	_, _, err = db2.GetById(9999)
+	// this should not exist
+	_, _, err = db2.getById(9999)
+	if err == nil {
+		t.Error("got non existing object")
+	}
+	_, err = db2.Get([]byte("9999"))
 	if err == nil {
 		t.Error("got non existing object")
 	}
 
-	if hr := db2.Cache.GetHitRate(); hr != 0 {
+	// test chache
+	if hr := db2.cache.GetHitRate(); hr != 0 {
 		log.Infof("Cache hit rate %.2f", hr)
 		t.Error("wrong hit rate")
 	}
-	_, _, _ = db2.GetById(id2)
+	_, _, _ = db2.getById(id2)
 
-	if hr := db2.Cache.GetHitRate(); hr < 33.32 || hr > 33.34 {
+	if hr := db2.cache.GetHitRate(); hr < 33.32 || hr > 33.34 {
 		log.Infof("Cache hit rate %f", hr)
 		t.Error("wrong hit rate")
 	}
-	_, _, _ = db1.GetById(id2)
+	_, _, _ = db1.getById(id2)
 
-	if hr := db1.Cache.GetHitRate(); hr != 100 {
+	if hr := db1.cache.GetHitRate(); hr != 100 {
 		log.Infof("Cache hit rate %f", hr)
 		t.Error("wrong hit rate")
 	}
+	db1.Close()
+	db2.Close()
 }
 
-type benchmarkData struct {
-	Value uint
-	Str   string
-}
+func TestUpdate2(t *testing.T) {
+	const CacheSize = 100
+	DeleteDbFile("testUpdate2")
+	db, _ := Open[Person]("testUpdate2", CacheSize)
+	db.Append([]byte("Person1"), &testData[0])
+	db.Append([]byte("Person2"), &testData[1])
+	db.Append([]byte("Person3"), &Person{Name: "Rudolfshien", Surname: "Von Der Shuster", Age: 4})
+	db.Close()
+	// test update
+	db, _ = Open[Person]("testUpdate2", CacheSize)
+	pers, _ := db.Get([]byte("Person2"))
+	pers.Age = 1234
+	db.Update([]byte("Person2"), pers)
 
-var letterRunes = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+	db.Delete([]byte("Person1"))
 
-func NewBenchmarkData(n int) *benchmarkData {
-	d := &benchmarkData{Value: uint(n)}
-	b := make([]rune, 16)
-	for i := range b {
-		b[i] = letterRunes[rand.Intn(len(letterRunes))]
+	pers, _ = db.Get([]byte("Person3"))
+	pers.Name = "Rudolf"
+	pers.Age = 12
+	db.Update([]byte("Person3"), pers)
+	db.Close()
+
+	db, _ = Open[Person]("testUpdate2", CacheSize)
+
+	val, _ := db.Get([]byte("Person3"))
+
+	if val.Age != 12 && val.Name != "Rudolf" {
+		t.Error("Wrong value")
 	}
-	d.Str = string(b)
-	return d
+	db.Close()
 }
 
 func TestCache(t *testing.T) {
@@ -130,14 +160,15 @@ func TestCache(t *testing.T) {
 		d   *benchmarkData
 		err error
 	)
+	const CacheSize = 100
 
-	db, _ := Open[benchmarkData]("benchmark")
-	Close(db, "benchmark")
-	db, _ = Open[benchmarkData]("benchmark")
+	db, _ := Open[benchmarkData]("benchmarkCache", CacheSize)
+	db.Destroy()
+	db, _ = Open[benchmarkData]("benchmarkCache", CacheSize)
 
 	// gen 2 x times the cache capacity
 	// so the expected hitrate is 50%
-	var numElements = 2 * CacheMaxItems
+	var numElements = int(2 * CacheSize)
 
 	reference := make(map[ID]string)
 	for n := 0; n < numElements; n++ {
@@ -147,108 +178,89 @@ func TestCache(t *testing.T) {
 	}
 	db.Close()
 
-	db, _ = Open[benchmarkData]("benchmark")
+	db, _ = Open[benchmarkData]("benchmarkCache", CacheSize)
 	for n := 0; n < numElements; n++ {
 		rndNo := ID(rand.Intn(numElements))
-		if _, d, err = db.GetById(rndNo); err != nil {
+		if _, d, err = db.getById(rndNo); err != nil {
 			t.Error("get failed")
 		}
 		if d.Str != reference[ID(rndNo)] {
 			t.Error("values dont match", rndNo)
 		}
 	}
-	log.Info("Cache Hit rate: ", db.GetHitRate(), " %")
+	log.Info("Cache Hit rate: ", db.cache.GetHitRate(), " %")
 }
 
-func genRandomSequence(N int) []int {
-
-	var seq = make([]int, N)
-
-	for i := 1; i < N; i++ {
-
-		p := 1 + rand.Intn(N-1)
-
-		if seq[p] == 0 {
-			seq[p] = i
-		} else {
-			for ; p < N && seq[p] != 0; p++ {
-			}
-			if p < N {
-				seq[p] = i
-			} else {
-				for p = 1; p < N && seq[p] != 0; p++ {
-				}
-				if p < N {
-					seq[p] = i
-				} else {
-					panic("No place left")
-				}
-			}
-		}
-	}
-	return seq
-}
-
-func TestDeleteLogic(t *testing.T) {
+func TestDeleteAndUpdate(t *testing.T) {
 	var (
-		d   *benchmarkData
-		err error
+		value *benchmarkData
+		err   error
 	)
-	const N = CacheMaxItems * 2
-	log.Info("Testing N = ", N)
-	seq := genRandomSequence(N)
-	db, _ := Open[benchmarkData]("benchmark")
-	Close(db, "benchmark")
-	db, _ = Open[benchmarkData]("benchmark")
+	const CacheSize = 100
+	const N = 200
+
+	elements := make([]int, N)
+
+	DeleteDbFile("delLogic")
+
+	db, _ := Open[benchmarkData]("delLogic", CacheSize)
+
+	// add
 	for n := 0; n < N; n++ {
-		d = NewBenchmarkData(n)
-		db.Append([]byte(fmt.Sprintf("Item%d", n)), d)
-	}
-	for n := 0; n < N; n++ {
-		err = db.DeleteById(ID(seq[n]))
-		if err != nil {
-			t.Error("should be able to delete")
-		}
-	}
-	err = db.DeleteById(0)
-	if err == nil {
-		t.Error("should not be able to delete")
-	}
-	l := len(db.markForDelete)
-	if l != N {
-		t.Error("there should be ", N, " deleted")
-	}
-	l = len(db.Cache.queue)
-	if l != 0 {
-		t.Error("cache should be empty, but is :", l)
-	}
-}
-func BenchmarkCache(b *testing.B) {
-	var (
-		d   *benchmarkData
-		err error
-	)
-
-	db, _ := Open[benchmarkData]("benchmark")
-	Close(db, "benchmark")
-	db, _ = Open[benchmarkData]("benchmark")
-
-	var numElements = int(CacheMaxItems * 2)
-
-	reference := make(map[ID]string)
-	for n := 0; n < numElements; n++ {
-		d = NewBenchmarkData(n)
-		db.Append([]byte(fmt.Sprintf("Item%d", n)), d)
-		reference[ID(n)] = d.Str
+		value = NewBenchmarkData(n)
+		key := []byte(fmt.Sprintf("Item%d", n))
+		elements[n] = n
+		db.Append(key, value)
 	}
 	db.Close()
 
-	db, _ = Open[benchmarkData]("benchmark")
-	for n := 0; n < b.N; n++ {
-		rndNo := ID(rand.Intn(numElements))
-		if _, _, err = db.GetById(rndNo); err != nil {
-			b.Error("get failed")
+	// modify half
+	db, _ = Open[benchmarkData]("delLogic", CacheSize)
+	for n := N / 2; n < N; n++ {
+		x := rand.Intn(N)
+		key := []byte(fmt.Sprintf("Item%d", x))
+		value, err := db.Get(key)
+		if err != nil {
+			t.Error("should be able to get")
+		}
+		value.Str += " mod"
+		value.Value = 0
+		db.Update(key, value)
+		if err != nil {
+			t.Error("should be able to update")
 		}
 	}
-	log.Info("-> ", b.N, " iterations. Cache Hit rate: ", db.GetHitRate(), " %")
+	db.Close()
+
+	// delete randomly
+	db, _ = Open[benchmarkData]("delLogic", CacheSize)
+	log.Info("db size", db.ItemsCount)
+	for n := 0; n < N; n++ {
+		which := rand.Intn(len(elements))
+		elNo := elements[which]
+		key := []byte(fmt.Sprintf("Item%d", elNo))
+		err = db.Delete(key)
+		if err != nil {
+			t.Errorf("el:%d, key:%s", elNo, string(key))
+			t.Error(fmt.Errorf("err delete %w", err))
+			return
+		}
+		elements[which] = elements[len(elements)-1]
+		elements = elements[:len(elements)-1]
+	}
+
+	err = db.Delete([]byte("Item0"))
+	if err == nil {
+		t.Error("should not be able to delete")
+	}
+
+	l := len(db.cache.queue)
+	if l != 0 {
+		t.Error("cache should be empty, but is :", l)
+	}
+	if err = db.Close(); err != nil {
+		t.Error("error closing db :", err)
+	}
+	log.Info("Cache Hit rate: ", db.cache.GetHitRate(), " %")
+	db.Close()
 }

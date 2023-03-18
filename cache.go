@@ -1,35 +1,48 @@
 package simpledb
 
-const CacheMaxItems = 100
-
-type Cache[T any] struct {
-	data     map[ID]*CacheItem[T]
-	queue    []ID
+type cacheStats struct {
 	requests uint64
 	hits     uint64
 }
+type cache[T any] struct {
+	data             map[ID]*cacheItem[T]
+	queue            []ID
+	statistics       cacheStats
+	size             uint32
+	addItem          func(item *cacheItem[T])
+	checkaAndGetItem func(id ID) (item *cacheItem[T], ok bool)
+	removeItem       func(id ID) (ok bool)
+}
 
-type CacheItem[T any] struct {
+type cacheItem[T any] struct {
 	ID       ID
 	LastUsed uint64
-	KeyHash  uint32
-	Key      []byte
+	KeyHash  Hash
+	Key      Key
 	Value    *T
 }
 
-func (c *Cache[T]) Initialize() {
-	if c.data == nil {
-		c.data = make(map[ID]*CacheItem[T])
+func newCache[T any](CacheSize uint32) (c *cache[T]) {
+	c = &cache[T]{}
+
+	if CacheSize == 0 { // if no cache is to be created, set dummy functions, to eliminate frequent `if cache == nil`` checks
+		c.addItem = func(item *cacheItem[T]) {}
+		c.checkaAndGetItem = func(id ID) (item *cacheItem[T], ok bool) { return nil, false }
+		c.removeItem = func(id ID) (ok bool) { return true }
 	} else {
-		panic("reinitializing cache")
-	}
-	if c.queue == nil {
+		c.addItem = c.addItemCache
+		c.checkaAndGetItem = c.checkaAndGetItemCache
+		c.removeItem = c.removeItemCache
+		// only create the map and slice, if cache is actually created
+		c.size = CacheSize
+		c.data = make(map[ID]*cacheItem[T])
 		c.queue = make([]ID, 0)
-	} else {
-		panic("reinitializing cache")
 	}
+	return
 }
-func (c *Cache[T]) Cleanup() {
+
+// cleans up the cache
+func (c *cache[T]) cleanup() {
 
 	// mark unused for GC
 	for i := range c.data {
@@ -39,8 +52,9 @@ func (c *Cache[T]) Cleanup() {
 	c.queue = nil
 }
 
-func (c *Cache[T]) addItem(item *CacheItem[T]) {
-	if len(c.queue) == CacheMaxItems {
+// adds new item to the cache and drops the oldest one
+func (c *cache[T]) addItemCache(item *cacheItem[T]) {
+	if uint32(len(c.queue)) == c.size {
 		delete(c.data, c.queue[0])
 		c.queue = c.queue[1:]
 	}
@@ -48,15 +62,32 @@ func (c *Cache[T]) addItem(item *CacheItem[T]) {
 	c.queue = append(c.queue, item.ID)
 }
 
-func (c *Cache[T]) getItem(id ID) (item *CacheItem[T], ok bool) {
-	c.requests++
+// checks if the item is in the cache and if so, returns its value
+func (c *cache[T]) checkaAndGetItemCache(id ID) (item *cacheItem[T], ok bool) {
+	c.statistics.requests++
 	if item, ok = c.data[id]; ok {
-		c.hits++
+		c.statistics.hits++
 	}
 	return
 }
 
-func (c *Cache[T]) removeItem(id ID) (ok bool) {
+// touches an element in the queue and marks it as the one used most recently (i.e. puts it at the end of the queue)
+func (c *cache[T]) touch(id ID) {
+	if len(c.queue) < 2 {
+		return
+	}
+	// find that ID in the queue
+	for at, found := range c.queue {
+		if found == id {
+			c.queue = append(c.queue[:at], c.queue[at+1:]...)
+			c.queue = append(c.queue, id)
+			return
+		}
+	}
+}
+
+// removes an item with given id from cache
+func (c *cache[T]) removeItemCache(id ID) (ok bool) {
 	delete(c.data, id)
 
 	//remove id from queue
@@ -70,9 +101,10 @@ func (c *Cache[T]) removeItem(id ID) (ok bool) {
 	return
 }
 
-func (m Cache[T]) GetHitRate() float64 {
-	if m.requests > 0 {
-		return float64(m.hits) / float64(m.requests) * 100
+// Gets rudimentary cache stats
+func (m cache[T]) GetHitRate() float64 {
+	if m.statistics.requests > 0 {
+		return float64(m.statistics.hits) / float64(m.statistics.requests) * 100
 	} else {
 		return 0
 	}

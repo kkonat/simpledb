@@ -26,9 +26,9 @@ Each database block in the file hast the following structure:
 - ID        4 bytes         - Object ID
 - timestamp 8 bytes         - timestamp
 - KeyHash   4 bytes         - hash of the key
-- KeyLen    2 bytes
+- KeyLen    4 bytes
 - Key       variable length - key
-- Value     variable length - payload)
+- Value     variable length - payload
 ```
 
 The database features a simple LIFO cache
@@ -54,22 +54,24 @@ Benchmark results for **borsh** encoding:
 
 The following operations are supported as of now:
 
-| Operation  | Description                                                       |
+| Operation  | Description  |
 | ---------- | :---------------------------------------------------------------- |
-| Open       | opens the database                                                |
-| Append     | appends data item to the database and returns its id              |
-| GetById    | gets data item from the database by id                            |
-| DeleteById | deletes data item by id                                           |
-| Close      | closes the database                                               |
-| Destroy    | closes and deletes all database files (useful for starting tests) |
+| Open       | creates and opens the database if it does not exist or opens if it does |
+| Append     | appends data item to the database|
+| Update     | updates data item with the given key |
+| Get        | gets data item from the database by key |
+| Delete     | deletes data item by id |
+| Close      | closes the database|
+| Destroy    | deletes  database files (requires full path name to db.file for security) |
 
 I wrote this package try some of the following go fetures out:
 
 - file io, path handling, file operations
 - error handling (wrapping)
-- data marshalling / encoding (json, gob, binary)
+- data marshalling / encoding (json, gob, binary, borsh)
 - TDD, benchmarking
 - simple data structures (maps, queue)
+- profiling 
 - modules
 
 TODO: 
