@@ -9,6 +9,9 @@ with memory cache
 Currently uses borsh (Binary Object Representation Serializer for Hashing) for binary encoding of values. I tried out gob encoding, but due to the nature of sequential writes to the database, it would require some heavy wrangling to get rid of type definition
 data included in the binary form
 
+The database holds in-memory index of key hashes and indices pointing to individual data items in the database file (map [hash] []index). This index is rebuilt when the database is opened. New data items (key, value pairs) are added to the database by appending them at the end of the file. The database also holds an in-memory list of deleted data items (map[index]bool). When an item is deleted, a corresponding entry is added to this list. Data items are updated by  appending the updated value at the end of the database file and marking the previous version as deleted. The database also maintains an in-memory cache of a pre-defined size with recently accessed data items. The cache uses a LIFO queue to determine the oldest data items, which will be discarded from the cache to make romm for new data. If data item is accessed it is moved to the beginning of the queue. Data is saved to disk on each append operation. On database close data in the database file is reorganized. This means a new file is created with persisting data items copied from the old file and all deleted itemsskipped. Data is read from the disk on two occassions: if a data item is not available in the cache and on database open operation, when the whole datbase file is scanned to rebuild the index file. Locating a key value pair in the database involves a single read from the map[hash] []index. For a given key hash a list of data items is obtained from the map and then linearly searched to find the exact match. Hashes are 32-bit long which means 4 billion potential values, and considering the fact that this is a "simple database" i.e. it will not store large sets of data, collisions are expected to be infrequent. Currently crc and superfast hash algos are implemented.
+
+
 Here are actual performnce results of various encoding types:
 | encoding | performance |
 | --- | -- |
@@ -68,3 +71,14 @@ I wrote this package try some of the following go fetures out:
 - TDD, benchmarking
 - simple data structures (maps, queue)
 - modules
+
+TODO: 
+- explore other hash functions
+  http://www.partow.net/programming/hashfunctions/index.html
+  https://stackoverflow.com/questions/2351087/what-is-the-best-32bit-hash-function-for-short-strings-tag-names
+- add disk write cache, i.e. group disk writes in blocks
+- add block read write for db reorganization on close
+- add an option to persist index in a separate file
+- add selectable hash functions
+
+
