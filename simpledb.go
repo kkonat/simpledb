@@ -127,7 +127,7 @@ func (db *SimpleDb[T]) appendWOLock(key []byte, value *T) (id ID, err error) {
 
 	db.keyMap[block.KeyHash] = append(db.keyMap[block.KeyHash], block.Id)
 	// Cache the newly added item
-	db.cache.addItem(&cacheItem[T]{
+	db.cache.addItem(&Item[T]{
 		ID:       ID(block.Id),
 		LastUsed: block.Timestamp,
 		Key:      key,
@@ -186,7 +186,7 @@ func (db *SimpleDb[T]) getById(id ID) (key []byte, value *T, err error) {
 	}
 
 	// create db Item for caching
-	db.cache.addItem(&cacheItem[T]{
+	db.cache.addItem(&Item[T]{
 		ID:       ID(block.Id),
 		LastUsed: block.Timestamp,
 		KeyHash:  block.KeyHash,

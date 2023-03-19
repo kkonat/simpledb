@@ -18,7 +18,7 @@ func NewBenchmarkData(n int) *benchmarkData {
 	d.Str = getRandomLetters(16)
 	return d
 }
-func BenchmarkCache(b *testing.B) {
+func BenchmarkPerfWithCache(b *testing.B) {
 	var (
 		d   *benchmarkData
 		err error
