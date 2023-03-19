@@ -1,22 +1,29 @@
 package simpledb
 
-import "github.com/kkonat/simpledb/hash"
+import (
+	"container/list"
 
-type cacheStats struct {
+	"sync"
+
+	"github.com/kkonat/simpledb/hash"
+)
+
+type Stats struct {
 	requests uint64
 	hits     uint64
 }
 type cache[T any] struct {
-	data             map[ID]*cacheItem[T]
-	queue            []ID
-	statistics       cacheStats
+	data             map[ID]*Item[T]
+	queue            *list.List
+	statistics       Stats
 	size             uint32
-	addItem          func(item *cacheItem[T])
-	checkaAndGetItem func(id ID) (item *cacheItem[T], ok bool)
+	addItem          func(item *Item[T])
+	checkaAndGetItem func(id ID) (item *Item[T], ok bool)
 	removeItem       func(id ID) (ok bool)
+	mtx              sync.RWMutex
 }
 
-type cacheItem[T any] struct {
+type Item[T any] struct {
 	ID       ID
 	LastUsed uint64
 	KeyHash  hash.Type
@@ -26,46 +33,54 @@ type cacheItem[T any] struct {
 
 func newCache[T any](CacheSize uint32) (c *cache[T]) {
 	c = &cache[T]{}
-
 	if CacheSize == 0 { // if no cache is to be created, set dummy functions, to eliminate frequent `if cache == nil`` checks
-		c.addItem = func(item *cacheItem[T]) {}
-		c.checkaAndGetItem = func(id ID) (item *cacheItem[T], ok bool) { return nil, false }
+		c.addItem = func(item *Item[T]) {}
+		c.checkaAndGetItem = func(id ID) (item *Item[T], ok bool) { return nil, false }
 		c.removeItem = func(id ID) (ok bool) { return true }
 	} else {
-		c.addItem = c.addItemCache
-		c.checkaAndGetItem = c.checkaAndGetItemCache
-		c.removeItem = c.removeItemCache
+		c.addItem = c.add
+		c.checkaAndGetItem = c.checkaAndGet
+		c.removeItem = c.remove
 		// only create the map and slice, if cache is actually created
 		c.size = CacheSize
-		c.data = make(map[ID]*cacheItem[T])
-		c.queue = make([]ID, 0)
+		c.data = make(map[ID]*Item[T])
+		c.queue = list.New()
 	}
 	return
 }
 
 // cleans up the cache
 func (c *cache[T]) cleanup() {
-
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
 	// mark unused for GC
 	for i := range c.data {
 		c.data[i] = nil
 	}
 	c.data = nil
+	c.queue.Init()
 	c.queue = nil
 }
 
 // adds new item to the cache and drops the oldest one
-func (c *cache[T]) addItemCache(item *cacheItem[T]) {
-	if uint32(len(c.queue)) == c.size {
-		delete(c.data, c.queue[0])
-		c.queue = c.queue[1:]
+func (c *cache[T]) add(item *Item[T]) {
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
+	if uint32(c.queue.Len()) == c.size {
+		first := c.queue.Front()
+		firstId, _ := first.Value.(ID)
+		delete(c.data, ID(firstId))
+		c.queue.Remove(first)
 	}
 	c.data[item.ID] = item
-	c.queue = append(c.queue, item.ID)
+	c.queue.PushBack(item.ID)
 }
 
 // checks if the item is in the cache and if so, returns its value
-func (c *cache[T]) checkaAndGetItemCache(id ID) (item *cacheItem[T], ok bool) {
+func (c *cache[T]) checkaAndGet(id ID) (item *Item[T], ok bool) {
+	c.mtx.RLock()
+	defer c.mtx.RUnlock()
+
 	c.statistics.requests++
 	if item, ok = c.data[id]; ok {
 		c.statistics.hits++
@@ -75,27 +90,32 @@ func (c *cache[T]) checkaAndGetItemCache(id ID) (item *cacheItem[T], ok bool) {
 
 // touches an element in the queue and marks it as the one used most recently (i.e. puts it at the end of the queue)
 func (c *cache[T]) touch(id ID) {
-	if len(c.queue) < 2 {
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
+
+	if c.queue.Len() < 2 {
 		return
 	}
 	// find that ID in the queue
-	for at, found := range c.queue {
-		if found == id {
-			c.queue = append(c.queue[:at], c.queue[at+1:]...)
-			c.queue = append(c.queue, id)
+	for el := c.queue.Front(); el != nil; el = el.Next() {
+		if el.Value == id {
+			c.queue.Remove(el)
+			c.queue.PushBack(el.Value)
 			return
 		}
 	}
 }
 
 // removes an item with given id from cache
-func (c *cache[T]) removeItemCache(id ID) (ok bool) {
+func (c *cache[T]) remove(id ID) (ok bool) {
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
 	delete(c.data, id)
 
 	//remove id from queue
-	for i := 0; i < len(c.queue); i++ {
-		if c.queue[i] == id { // delete from queue
-			c.queue = append(c.queue[:i], c.queue[i+1:]...)
+	for el := c.queue.Front(); el != nil; el = el.Next() {
+		if el.Value == id { // delete from queue
+			c.queue.Remove(el)
 			ok = true
 			break
 		}
@@ -104,9 +124,11 @@ func (c *cache[T]) removeItemCache(id ID) (ok bool) {
 }
 
 // Gets rudimentary cache stats
-func (m cache[T]) GetHitRate() float64 {
-	if m.statistics.requests > 0 {
-		return float64(m.statistics.hits) / float64(m.statistics.requests) * 100
+func (c *cache[T]) GetHitRate() float64 {
+	c.mtx.RLock()
+	defer c.mtx.RUnlock()
+	if c.statistics.requests > 0 {
+		return float64(c.statistics.hits) / float64(c.statistics.requests) * 100
 	} else {
 		return 0
 	}

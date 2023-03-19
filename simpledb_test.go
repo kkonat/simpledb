@@ -181,6 +181,7 @@ func TestCache(t *testing.T) {
 	db, _ = Open[benchmarkData]("benchmarkCache", CacheSize)
 	for n := 0; n < numElements; n++ {
 		rndNo := ID(rand.Intn(numElements))
+		log.Info(n)
 		if _, d, err = db.getById(rndNo); err != nil {
 			t.Error("get failed")
 		}
@@ -254,7 +255,7 @@ func TestDeleteAndUpdate(t *testing.T) {
 		t.Error("should not be able to delete")
 	}
 
-	l := len(db.cache.queue)
+	l := db.cache.queue.Len()
 	if l != 0 {
 		t.Error("cache should be empty, but is :", l)
 	}
