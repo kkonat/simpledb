@@ -2,7 +2,6 @@ package simpledb
 
 import (
 	"fmt"
-	"hash/crc32"
 	"math"
 	"math/rand"
 	"os"
@@ -50,9 +49,6 @@ func printBytes(bytes []byte) {
 
 // calculates hash of a buffer - must be fast and relatively collission-safe
 // 32 bits for mostly human-readable key values is obviously an overkill
-func getHash(data []byte) Hash {
-	return Hash(crc32.Checksum(data, crc32table))
-}
 
 // or for fun, let's try this function
 // http://www.azillionmonkeys.com/qed/hash.html

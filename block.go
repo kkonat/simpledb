@@ -5,13 +5,15 @@ import (
 	"encoding/binary"
 	"os"
 	"unsafe"
+
+	"github.com/kkonat/simpledb/hash"
 )
 
 type blockHeader struct {
 	Length    uint32 // uppercase, because must be exportable for binary encoding
 	Id        ID
 	Timestamp uint64
-	KeyHash   Hash
+	KeyHash   hash.Type
 	KeyLen    uint32 // can not be uint16, data is 32-bit word-aligned anyway, sizeof will return untrue no. of bytes
 }
 
@@ -37,7 +39,7 @@ func NewBlock(id ID, timestamp uint64, key []byte, value []byte) *block {
 	header = blockHeader{
 		Id:        id,
 		Timestamp: timestamp,
-		KeyHash:   getHash(key),
+		KeyHash:   hash.Get(key),
 		KeyLen:    uint32(len(key)),
 		Length:    uint32(blockLen),
 	}

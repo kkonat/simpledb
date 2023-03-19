@@ -1,5 +1,7 @@
 package simpledb
 
+import "github.com/kkonat/simpledb/hash"
+
 type cacheStats struct {
 	requests uint64
 	hits     uint64
@@ -17,7 +19,7 @@ type cache[T any] struct {
 type cacheItem[T any] struct {
 	ID       ID
 	LastUsed uint64
-	KeyHash  Hash
+	KeyHash  hash.Type
 	Key      Key
 	Value    *T
 }

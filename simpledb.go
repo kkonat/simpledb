@@ -2,13 +2,14 @@ package simpledb
 
 import (
 	"errors"
-	"hash/crc32"
 	"io"
 	"math"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/kkonat/simpledb/hash"
 
 	"github.com/near/borsh-go"
 	log "github.com/sirupsen/logrus"
@@ -19,18 +20,14 @@ const (
 	DbExt  = ".sdb"
 )
 
-var crc32table *crc32.Table
-
 func init() {
-	crc32table = crc32.MakeTable(0x82f63b78)
 	log.SetLevel(log.DebugLevel)
 }
 
 type Key []byte                 // keys are bytes, since strings would be a waste
-type Hash uint32                // no need for larger hashes for now
 type ID uint32                  // this is small database, so let's assume it may hold "only" 4 billion k,v pairs
 type BlockOffsets map[ID]uint64 // blocks may be up to 4GB?
-type HashIDs map[Hash][]ID
+type HashIDs map[hash.Type][]ID
 type DeleteFlags map[ID]struct{}
 
 type SimpleDb[T any] struct {
@@ -206,7 +203,7 @@ func (db *SimpleDb[T]) Get(searchedKey []byte) (val *T, err error) {
 	defer db.mtx.Unlock()
 
 	var candidateKey []byte
-	keyHash := getHash([]byte(searchedKey))
+	keyHash := hash.Get([]byte(searchedKey))
 
 	idCandidates, ok := db.keyMap[keyHash]
 	if !ok {
@@ -227,7 +224,7 @@ func (db *SimpleDb[T]) Update(keyToUpdate []byte, value *T) (err error) {
 	db.mtx.Lock()
 	defer db.mtx.Unlock()
 
-	keyHash := getHash([]byte(keyToUpdate))
+	keyHash := hash.Get([]byte(keyToUpdate))
 
 	idCandidates, ok := db.keyMap[keyHash]
 	if !ok {
@@ -251,7 +248,7 @@ func (db *SimpleDb[T]) Update(keyToUpdate []byte, value *T) (err error) {
 }
 
 // Marks item with a given Id for deletion, internal function, may be used for testing/benchmarking
-func (db *SimpleDb[T]) deleteById(id ID, keyHash Hash) error {
+func (db *SimpleDb[T]) deleteById(id ID, keyHash hash.Type) error {
 
 	if !db.has(id) {
 		return &NotFoundError{id: id}
@@ -293,7 +290,7 @@ func (db *SimpleDb[T]) Delete(aKey []byte) (err error) {
 	db.mtx.Lock()
 	defer db.mtx.Unlock()
 
-	keyHash := getHash([]byte(aKey))
+	keyHash := hash.Get([]byte(aKey))
 	ids, ok := db.keyMap[keyHash]
 	if !ok {
 		return &NotFoundError{}

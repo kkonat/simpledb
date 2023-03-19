@@ -1,7 +1,6 @@
-package superfasthash
+package hash
 
 import (
-	"hash/crc32"
 	"testing"
 )
 
@@ -27,28 +26,37 @@ var vals = map[string]uint32{
 }
 
 func TestHash(t *testing.T) {
-	if superfasthash(nil) != 0 {
+	SetFunc(calcSuperfasthash)
+	if Get(nil) != 0 {
 		t.Fail()
 	}
-	if superfasthash([]byte("too")) != 0x3ad11d33 {
+	if Get([]byte("too")) != 0x3ad11d33 {
 		t.Fail()
 	}
 	for k, v := range vals {
-		if superfasthash([]byte(k)) != v {
+		if Get([]byte(k)) != Type(v) {
 			t.Fail()
 		}
 	}
 }
 
 func BenchmarkSuperfastHash(b *testing.B) { // 11.21 ns/op
+	SetFunc(calcSuperfasthash)
 	for n := 0; n < b.N; n++ {
-		superfasthash([]byte("Testing hash function"))
+		Get([]byte("Testing hash function"))
 	}
 }
 
 func BenchmarkCRC32(b *testing.B) { // 32.09 ns/op
-	crc32table := crc32.MakeTable(0x82f63b78)
+	SetFunc(calcCrc32)
 	for n := 0; n < b.N; n++ {
-		crc32.Checksum([]byte("Testing hash function"), crc32table)
+		Get([]byte("Testing hash function"))
+	}
+}
+
+func BenchmarkSimplest(b *testing.B) { // 32.09 ns/op
+	SetFunc(calcSimplesthash)
+	for n := 0; n < b.N; n++ {
+		Get([]byte("Testing hash function"))
 	}
 }

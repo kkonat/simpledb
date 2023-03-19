@@ -30,19 +30,19 @@
  *
  */
 
-package superfasthash
+package hash
 
 func get16bits(data []byte, index int) (bits uint32) {
 	return uint32(data[index+1])<<8 + uint32(data[index])
 }
 
-func superfasthash(data []byte) (hash uint32) {
+func calcSuperfasthash(data []byte) Type {
 
 	if data == nil || len(data) == 0 {
-		return hash
+		return 0
 	}
 
-	hash = uint32(len(data))
+	hash := uint32(len(data))
 	rem := len(data) & 3
 	index := 0
 
@@ -78,5 +78,5 @@ func superfasthash(data []byte) (hash uint32) {
 	hash = hash ^ (hash << 25)
 	hash = hash + (hash >> 6)
 
-	return
+	return Type(hash)
 }
