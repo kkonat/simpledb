@@ -39,7 +39,7 @@ func newCache[T any](CacheSize uint32) (c *cache[T]) {
 		c.removeItem = func(id ID) (ok bool) { return true }
 	} else {
 		c.addItem = c.add
-		c.checkaAndGetItem = c.checkaAndGet
+		c.checkaAndGetItem = c.checkAndGet
 		c.removeItem = c.remove
 		// only create the map and slice, if cache is actually created
 		c.size = CacheSize
@@ -77,7 +77,7 @@ func (c *cache[T]) add(item *Item[T]) {
 }
 
 // checks if the item is in the cache and if so, returns its value
-func (c *cache[T]) checkaAndGet(id ID) (item *Item[T], ok bool) {
+func (c *cache[T]) checkAndGet(id ID) (item *Item[T], ok bool) {
 	c.mtx.RLock()
 	defer c.mtx.RUnlock()
 
