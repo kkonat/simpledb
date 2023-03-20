@@ -40,7 +40,7 @@ type SimpleDb[T any] struct {
 	deleted       DeleteFlags
 	blockOffsets  BlockOffsets
 	keyMap        HashIDs
-	mtx           sync.Mutex
+	mtx           sync.RWMutex
 }
 
 // creates a new database or opens an existing one
@@ -147,7 +147,7 @@ func (db *SimpleDb[T]) getById(id ID) (key []byte, value *T, err error) {
 	// get from cache if cached
 	if object, ok := db.cache.checkaAndGetItem(id); ok {
 		if _, ok := db.deleted[id]; !ok { // if in cache and not deleted
-			db.cache.touch(id)
+			db.cache.touch(id) // mark as recently accessed
 			return object.Key, object.Value, nil
 		}
 	}
@@ -195,8 +195,8 @@ func (db *SimpleDb[T]) getById(id ID) (key []byte, value *T, err error) {
 
 // Gets a value for the given key
 func (db *SimpleDb[T]) Get(searchedKey []byte) (val *T, err error) {
-	db.mtx.Lock()
-	defer db.mtx.Unlock()
+	db.mtx.RLock()
+	defer db.mtx.RUnlock()
 
 	var candidateKey []byte
 	keyHash := hash.Get([]byte(searchedKey))

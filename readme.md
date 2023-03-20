@@ -74,10 +74,7 @@ I wrote this package try some of the following go fetures out:
 - modules
 
 TODO: 
-- explore other hash functions
-  http://www.partow.net/programming/hashfunctions/index.html
-  https://stackoverflow.com/questions/2351087/what-is-the-best-32bit-hash-function-for-short-strings-tag-names
-- add disk write cache, i.e. group disk writes in blocks
+-- add disk write cache, i.e. group disk writes in blocks
 - or write in background
 - add block read write for db reorganization on close
 - add an option to persist index in a separate file

@@ -35,15 +35,16 @@ func BenchmarkPerfWithCache(b *testing.B) {
 		db.Append([]byte(fmt.Sprintf("Item%d", n)), d)
 		reference[ID(n)] = d.Str
 	}
-	db.Close()
+	// db.Close()
 
-	db, _ = Open[benchmarkData]("benchmark", CacheSize)
+	// db, _ = Open[benchmarkData]("benchmark", CacheSize)
 	for n := 0; n < b.N; n++ {
 		rndNo := ID(rand.Intn(int(numElements)))
 		if _, _, err = db.getById(rndNo); err != nil {
 			b.Error("get failed")
 		}
 	}
+	db.Close()
 	log.Info("-> ", b.N, " iterations. Cache Hit rate: ", db.cache.GetHitRate(), " %")
 }
 

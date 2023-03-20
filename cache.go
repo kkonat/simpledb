@@ -1,19 +1,29 @@
 package simpledb
 
-import "github.com/kkonat/simpledb/hash"
+import (
+	"container/list"
+	"fmt"
 
-type cacheStats struct {
+	"sync"
+
+	"github.com/kkonat/simpledb/hash"
+)
+
+type Stats struct {
 	requests uint64
 	hits     uint64
 }
 type cache[T any] struct {
 	data             map[ID]*Item[T]
-	queue            []ID
-	statistics       cacheStats
+
+	queue            *list.List
+	queueIndx        map[ID]*list.Element
+	statistics       Stats
 	size             uint32
 	addItem          func(item *Item[T])
 	checkaAndGetItem func(id ID) (item *Item[T], ok bool)
 	removeItem       func(id ID) (ok bool)
+	mtx              sync.RWMutex
 }
 
 type Item[T any] struct {
@@ -25,7 +35,6 @@ type Item[T any] struct {
 
 func newCache[T any](CacheSize uint32) (c *cache[T]) {
 	c = &cache[T]{}
-
 	if CacheSize == 0 { // if no cache is to be created, set dummy functions, to eliminate frequent `if cache == nil`` checks
 		c.addItem = func(item *Item[T]) {}
 		c.checkaAndGetItem = func(id ID) (item *Item[T], ok bool) { return nil, false }
@@ -37,34 +46,51 @@ func newCache[T any](CacheSize uint32) (c *cache[T]) {
 		// only create the map and slice, if cache is actually created
 		c.size = CacheSize
 		c.data = make(map[ID]*Item[T])
-		c.queue = make([]ID, 0)
+
+		c.queueIndx = make(map[ID]*list.Element)
+		c.queue = list.New()
 	}
 	return
 }
 
 // cleans up the cache
 func (c *cache[T]) cleanup() {
-
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
 	// mark unused for GC
 	for i := range c.data {
 		c.data[i] = nil
 	}
 	c.data = nil
+	c.queue.Init()
 	c.queue = nil
+	for i := range c.queueIndx {
+		c.queueIndx[i] = nil
+	}
 }
 
 // adds new item to the cache and drops the oldest one
 func (c *cache[T]) add(item *Item[T]) {
-	if uint32(len(c.queue)) == c.size {
-		delete(c.data, c.queue[0])
-		c.queue = c.queue[1:]
+
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
+
+	if uint32(c.queue.Len()) == c.size {
+		first := c.queue.Front()
+		firstId, _ := first.Value.(ID)
+		delete(c.data, firstId)
+		c.queue.Remove(first)
+		delete(c.queueIndx, firstId)
 	}
 	c.data[item.ID] = item
-	c.queue = append(c.queue, item.ID)
+	c.queue.PushBack(item.ID)
+	c.queueIndx[item.ID] = c.queue.Back()
 }
 
 // checks if the item is in the cache and if so, returns its value
 func (c *cache[T]) checkAndGet(id ID) (item *Item[T], ok bool) {
+	c.mtx.RLock()
+	defer c.mtx.RUnlock()
 	c.statistics.requests++
 	if item, ok = c.data[id]; ok {
 		c.statistics.hits++
@@ -74,36 +100,43 @@ func (c *cache[T]) checkAndGet(id ID) (item *Item[T], ok bool) {
 
 // touches an element in the queue and marks it as the one used most recently (i.e. puts it at the end of the queue)
 func (c *cache[T]) touch(id ID) {
-	if len(c.queue) < 2 {
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
+
+	if c.queue.Len() < 2 {
 		return
 	}
 	// find that ID in the queue
-	for at, found := range c.queue {
-		if found == id {
-			c.queue = append(c.queue[:at], c.queue[at+1:]...)
-			c.queue = append(c.queue, id)
-			return
-		}
-	}
+	el := c.queueIndx[id]
+	c.queue.Remove(el)
+	c.queue.PushBack(el.Value)
+	c.queueIndx[id] = c.queue.Back()
 }
 
 // removes an item with given id from cache
 func (c *cache[T]) remove(id ID) (ok bool) {
-	delete(c.data, id)
 
-	//remove id from queue
-	for i := 0; i < len(c.queue); i++ {
-		if c.queue[i] == id { // delete from queue
-			c.queue = append(c.queue[:i], c.queue[i+1:]...)
-			ok = true
-			break
-		}
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
+
+	delete(c.data, id)        // dlelete data item
+	el, ok := c.queueIndx[id] // find el in queue using index)
+	if ok {
+		c.queue.Remove(el)      // delete el in queue
+		delete(c.queueIndx, id) // delete el in index
+	} else {
+		panic(fmt.Sprintf("no el %d in queue", id))
+
 	}
 	return
 }
 
 // Gets rudimentary cache stats
 func (c *cache[T]) GetHitRate() float64 {
+
+	c.mtx.RLock()
+	defer c.mtx.RUnlock()
+
 	if c.statistics.requests > 0 {
 		return float64(c.statistics.hits) / float64(c.statistics.requests) * 100
 	} else {

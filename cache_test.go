@@ -5,6 +5,44 @@ import (
 	"testing"
 )
 
+func TestCacheFunctions(t *testing.T) {
+	const N = 10000
+	var CacheSize = N
+
+	cache := newCache[benchmarkData](uint32(CacheSize))
+	reference := make(map[ID]string)
+
+	for n := 0; n < N; n++ {
+		d := NewBenchmarkData(n)
+		cache.add(&Item[benchmarkData]{ID: ID(n), Value: d})
+		reference[ID(n)] = d.Str
+	}
+
+	for n := 0; n < N/100; n++ {
+		cache.touch(ID(n))
+	}
+
+	for n := 0; n < len(reference); n++ {
+		d, ok := cache.checkAndGet(ID(n))
+		if !ok || reference[ID(n)] != (*d).Value.Str {
+			t.Error("Data mismatch")
+		}
+	}
+
+	for n := 0; n < N/2; n++ {
+		cache.remove(ID(n))
+		delete(reference, ID(n))
+	}
+
+	for id, str := range reference {
+		cacheItem, ok := cache.checkAndGet(ID(id))
+		if !ok || str != (*cacheItem).Value.Str {
+			t.Error("Data mismatch")
+		}
+	}
+}
+
+
 func BenchmarkCacheAdd(b *testing.B) {
 	b.StopTimer()
 	var (
