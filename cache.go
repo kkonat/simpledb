@@ -15,6 +15,7 @@ type Stats struct {
 }
 type cache[T any] struct {
 	data             map[ID]*Item[T]
+
 	queue            *list.List
 	queueIndx        map[ID]*list.Element
 	statistics       Stats
@@ -46,6 +47,7 @@ func newCache[T any](CacheSize uint32) (c *cache[T]) {
 		// only create the map and slice, if cache is actually created
 		c.size = CacheSize
 		c.data = make(map[ID]*Item[T])
+
 		c.queueIndx = make(map[ID]*list.Element)
 		c.queue = list.New()
 	}
@@ -70,6 +72,7 @@ func (c *cache[T]) cleanup() {
 
 // adds new item to the cache and drops the oldest one
 func (c *cache[T]) add(item *Item[T]) {
+
 	c.mtx.Lock()
 	defer c.mtx.Unlock()
 
@@ -89,7 +92,6 @@ func (c *cache[T]) add(item *Item[T]) {
 func (c *cache[T]) checkAndGet(id ID) (item *Item[T], ok bool) {
 	c.mtx.RLock()
 	defer c.mtx.RUnlock()
-
 	c.statistics.requests++
 	if item, ok = c.data[id]; ok {
 		c.statistics.hits++
@@ -114,6 +116,7 @@ func (c *cache[T]) touch(id ID) {
 
 // removes an item with given id from cache
 func (c *cache[T]) remove(id ID) (ok bool) {
+
 	c.mtx.Lock()
 	defer c.mtx.Unlock()
 
@@ -124,14 +127,17 @@ func (c *cache[T]) remove(id ID) (ok bool) {
 		delete(c.queueIndx, id) // delete el in index
 	} else {
 		panic(fmt.Sprintf("no el %d in queue", id))
+
 	}
 	return
 }
 
 // Gets rudimentary cache stats
 func (c *cache[T]) GetHitRate() float64 {
+
 	c.mtx.RLock()
 	defer c.mtx.RUnlock()
+
 	if c.statistics.requests > 0 {
 		return float64(c.statistics.hits) / float64(c.statistics.requests) * 100
 	} else {

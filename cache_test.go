@@ -42,6 +42,7 @@ func TestCacheFunctions(t *testing.T) {
 	}
 }
 
+
 func BenchmarkCacheAdd(b *testing.B) {
 	b.StopTimer()
 	var (
