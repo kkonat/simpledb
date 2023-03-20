@@ -24,7 +24,6 @@ Each database block in the file hast the following structure:
 ```
 - Offset    4 bytes         - Offset to the next block in the file (i.e. block lenght)
 - ID        4 bytes         - Object ID
-- timestamp 8 bytes         - timestamp
 - KeyHash   4 bytes         - hash of the key
 - KeyLen    4 bytes
 - Key       variable length - key

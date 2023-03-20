@@ -162,9 +162,8 @@ func TestCache(t *testing.T) {
 	)
 	const CacheSize = 100
 
+	DeleteDbFile("benchmarkCache")
 	db, _ := Open[benchmarkData]("benchmarkCache", CacheSize)
-	db.Destroy()
-	db, _ = Open[benchmarkData]("benchmarkCache", CacheSize)
 
 	// gen 2 x times the cache capacity
 	// so the expected hitrate is 50%

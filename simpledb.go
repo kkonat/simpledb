@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"time"
 
 	"github.com/kkonat/simpledb/hash"
 
@@ -112,9 +111,8 @@ func (db *SimpleDb[T]) appendWOLock(key []byte, value *T) (id ID, err error) {
 	}
 
 	id = db.genNewId()
-	timestamp := uint64(time.Now().Unix())
 
-	block := NewBlock(id, timestamp, key, payload) // and then the payload
+	block := NewBlock(id, key, payload) // and then the payload
 
 	// write whole block  at once
 	if bytesWritten, err := block.write(db.fileHandle); err != nil || uint32(bytesWritten) != block.Length {
@@ -128,11 +126,10 @@ func (db *SimpleDb[T]) appendWOLock(key []byte, value *T) (id ID, err error) {
 	db.keyMap[block.KeyHash] = append(db.keyMap[block.KeyHash], block.Id)
 	// Cache the newly added item
 	db.cache.addItem(&Item[T]{
-		ID:       ID(block.Id),
-		LastUsed: block.Timestamp,
-		Key:      key,
-		KeyHash:  block.KeyHash,
-		Value:    value,
+		ID:      ID(block.Id),
+		Key:     key,
+		KeyHash: block.KeyHash,
+		Value:   value,
 	})
 
 	return id, nil
@@ -187,11 +184,10 @@ func (db *SimpleDb[T]) getById(id ID) (key []byte, value *T, err error) {
 
 	// create db Item for caching
 	db.cache.addItem(&Item[T]{
-		ID:       ID(block.Id),
-		LastUsed: block.Timestamp,
-		KeyHash:  block.KeyHash,
-		Key:      key,
-		Value:    value,
+		ID:      ID(block.Id),
+		KeyHash: block.KeyHash,
+		Key:     key,
+		Value:   value,
 	})
 
 	return

@@ -17,11 +17,10 @@ type cache[T any] struct {
 }
 
 type Item[T any] struct {
-	ID       ID
-	LastUsed uint64
-	KeyHash  hash.Type
-	Key      Key
-	Value    *T
+	ID      ID
+	KeyHash hash.Type
+	Key     Key
+	Value   *T
 }
 
 func newCache[T any](CacheSize uint32) (c *cache[T]) {

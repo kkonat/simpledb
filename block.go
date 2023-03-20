@@ -10,11 +10,11 @@ import (
 )
 
 type blockHeader struct {
-	Length    uint32 // uppercase, because must be exportable for binary encoding
-	Id        ID
-	Timestamp uint64
-	KeyHash   hash.Type
-	KeyLen    uint32 // can not be uint16, data is 32-bit word-aligned anyway, sizeof will return untrue no. of bytes
+	Length  uint32 // uppercase, because must be exportable for binary encoding
+	Id      ID
+	KeyHash hash.Type
+	KeyLen  uint32 // can not be uint16, data is 32-bit word-aligned anyway, sizeof will return untrue no. of bytes
+	DataLen uint32 // can not be uint
 }
 
 func (b *blockHeader) read(file *os.File) (err error) {
@@ -32,16 +32,16 @@ type block struct {
 	value []byte
 }
 
-func NewBlock(id ID, timestamp uint64, key []byte, value []byte) *block {
+func NewBlock(id ID, key []byte, value []byte) *block {
 	var header blockHeader
 	headerLen := int(unsafe.Sizeof(header))
 	blockLen := headerLen + len(key) + len(value)
 	header = blockHeader{
-		Id:        id,
-		Timestamp: timestamp,
-		KeyHash:   hash.Get(key),
-		KeyLen:    uint32(len(key)),
-		Length:    uint32(blockLen),
+		Id:      id,
+		KeyHash: hash.Get(key),
+		KeyLen:  uint32(len(key)),
+		DataLen: uint32(len(value)),
+		Length:  uint32(blockLen),
 	}
 	block := &block{blockHeader: header, key: key, value: value}
 	return block
