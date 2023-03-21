@@ -24,7 +24,7 @@ func TestCacheFunctions(t *testing.T) {
 
 	for n := 0; n < len(reference); n++ {
 		d, ok := cache.checkAndGet(ID(n))
-		if !ok || reference[ID(n)] != (*d).Value.Str {
+		if !ok || reference[ID(n)] != d.Value.Str {
 			t.Error("Data mismatch")
 		}
 	}
@@ -36,12 +36,11 @@ func TestCacheFunctions(t *testing.T) {
 
 	for id, str := range reference {
 		cacheItem, ok := cache.checkAndGet(ID(id))
-		if !ok || str != (*cacheItem).Value.Str {
+		if !ok || str != cacheItem.Value.Str {
 			t.Error("Data mismatch")
 		}
 	}
 }
-
 
 func BenchmarkCacheAdd(b *testing.B) {
 	b.StopTimer()
@@ -135,7 +134,7 @@ func BenchmarkCacheRemove(b *testing.B) {
 			reference = reference[:left-1]
 		}
 
-		cache.removeItem(ID(item))
+		cache.remove(ID(item))
 		// log.Info(item)
 	}
 }

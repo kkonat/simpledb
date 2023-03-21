@@ -9,7 +9,7 @@ import (
 )
 
 func TestNew(t *testing.T) {
-	d, err := Open[Person]("testdb", 0)
+	d, err := Open[Person]("testdb", 1)
 	if err != nil {
 		t.Errorf("failed to create database: %v", err)
 	}
@@ -25,10 +25,11 @@ type Person struct {
 var testData []Person = []Person{
 	{"Hans", "Kloss", 44},
 	{"Ulrika", "Van der Klompfer", 666},
+	{"Eugen", "von Kotke", 123},
 }
 
 func TestDestroy(t *testing.T) {
-	const CacheSize = 0
+	const CacheSize = 1
 	db, err := Open[Person]("testDestroy", CacheSize)
 	if err != nil {
 		t.Errorf("failed to create database: %v", err)
@@ -38,6 +39,59 @@ func TestDestroy(t *testing.T) {
 	err = db.Destroy()
 	if err != nil {
 		t.Errorf("failed to kill database: %v", err)
+	}
+}
+func TestAppendGetWithCache(t *testing.T) {
+	const CacheSize = 1
+	DeleteDbFile("testAppendGet")
+
+	// add item to db, then close (flush to disK)
+	db, err := Open[Person]("testAppendGet", CacheSize)
+	if err != nil {
+		t.Errorf("failed to create database: %v", err)
+	}
+	db.Append([]byte("Person1"), &testData[0])
+	db.Close()
+
+	// check if write cache flushed ok, item persisted
+	db, err = Open[Person]("testAppendGet", CacheSize)
+	if err != nil {
+		t.Errorf("failed to reopen database: %v", err)
+	}
+	item, err := db.Get([]byte("Person1"))
+	if err != nil {
+		t.Error("failed to get item", err)
+	}
+	if *item != testData[0] {
+		t.Error("data mismatch")
+	}
+
+	// add a new item
+	db.Append([]byte("Person2"), &testData[1])
+
+	// check if it can be retrieved straight from the cache
+	item, err = db.Get([]byte("Person2"))
+	if err != nil {
+		t.Error("failed to get item", err)
+	}
+	if *item != testData[1] {
+		t.Error("data mismatch")
+	}
+
+	// check if deleted ok from write cache
+	db.Delete([]byte("Person2"))
+	_, err = db.Get([]byte("Person2"))
+	if err == nil {
+		t.Error("should not get", err)
+	}
+	db.flushWriteCache() // flush cache
+	// check if can be read from disk or read cache
+	item, err = db.Get([]byte("Person1"))
+	if err != nil {
+		t.Error("failed to get item", err)
+	}
+	if *item != testData[0] {
+		t.Error("data mismatch")
 	}
 }
 func TestBasicFunctionality(t *testing.T) {
@@ -103,19 +157,19 @@ func TestBasicFunctionality(t *testing.T) {
 	}
 
 	// test chache
-	if hr := db2.cache.GetHitRate(); hr != 0 {
+	if hr := db2.readCache.GetHitRate(); hr != 0 {
 		log.Infof("Cache hit rate %.2f", hr)
 		t.Error("wrong hit rate")
 	}
 	_, _, _ = db2.getById(id2)
 
-	if hr := db2.cache.GetHitRate(); hr < 33.32 || hr > 33.34 {
+	if hr := db2.readCache.GetHitRate(); hr < 24.99 || hr > 25.01 {
 		log.Infof("Cache hit rate %f", hr)
 		t.Error("wrong hit rate")
 	}
 	_, _, _ = db1.getById(id2)
 
-	if hr := db1.cache.GetHitRate(); hr != 100 {
+	if hr := db1.readCache.GetHitRate(); hr != 100.0 {
 		log.Infof("Cache hit rate %f", hr)
 		t.Error("wrong hit rate")
 	}
@@ -188,7 +242,7 @@ func TestCache(t *testing.T) {
 			t.Error("values dont match", rndNo)
 		}
 	}
-	log.Info("Cache Hit rate: ", db.cache.GetHitRate(), " %")
+	log.Info("Cache Hit rate: ", db.readCache.GetHitRate(), " %")
 }
 
 func TestDeleteAndUpdate(t *testing.T) {
@@ -254,13 +308,13 @@ func TestDeleteAndUpdate(t *testing.T) {
 		t.Error("should not be able to delete")
 	}
 
-	l := db.cache.queue.Len()
+	l := db.readCache.queue.Len()
 	if l != 0 {
 		t.Error("cache should be empty, but is :", l)
 	}
 	if err = db.Close(); err != nil {
 		t.Error("error closing db :", err)
 	}
-	log.Info("Cache Hit rate: ", db.cache.GetHitRate(), " %")
+	log.Info("Cache Hit rate: ", db.readCache.GetHitRate(), " %")
 	db.Close()
 }

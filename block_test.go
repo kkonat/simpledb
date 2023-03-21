@@ -25,4 +25,5 @@ func TestBlock(t *testing.T) {
 		string(block2.value) != string(block1.value) {
 		t.Error("Data mismatch")
 	}
+	t.Log("End")
 }
