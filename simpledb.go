@@ -34,7 +34,7 @@ type SimpleDb[T any] struct {
 	fileHandle *os.File
 
 	readCache     *cache[T]
-	writeCache    *writeCache[T]
+	writeBuff     *writeBuff
 	ItemsCount    uint64
 	currentOffset uint64 // as blocks may be up to  4GB long, the file length/index must be at least uint64
 	maxId         ID
@@ -52,7 +52,6 @@ func Open[T any](filename string, cacheSize uint32) (db *SimpleDb[T], err error)
 	db = &SimpleDb[T]{
 		filePath:    getFilepath(filename),
 		readCache:   newCache[T](cacheSize),
-		writeCache:  newWriteCache[T](cacheSize),
 		keyMap:      make(HashIDs, 0),
 		toBeDeleted: make(DeleteFlags),
 	}
@@ -66,12 +65,16 @@ func Open[T any](filename string, cacheSize uint32) (db *SimpleDb[T], err error)
 		if db.fileHandle, err = openFile(db.filePath); err != nil {
 			return nil, &DbGeneralError{err: "open"}
 		}
+
+		db.writeBuff = newWriteCache(db.fileHandle)
+
 		if err = db.loadDb(); err != nil {
 			return nil, &DbInternalError{oper: "reading db", err: err}
 		}
 	} else { // if not, initialize empty db
 		db.blockOffsets = make(BlockOffsets)
 		db.fileHandle, err = openFile(db.filePath)
+		db.writeBuff = newWriteCache(db.fileHandle)
 	}
 	return
 }
@@ -120,44 +123,28 @@ func (db *SimpleDb[T]) appendWOLock(key []byte, value *T) (id ID, err error) {
 	if err != nil {
 		panic("todo: handle serialization failure")
 	}
-	wrItem := &itemToWrite[T]{
-		ID:         ID(id),
-		Key:        key,
-		valueSrlzd: srlzdValue,
-	}
-	db.writeCache.accumulate(wrItem)
+	block := NewBlock(id, key, srlzdValue)
+	db.writeBuff.grow(id, block.getBytes())
 
-	if db.writeCache.size() > bulkWriteSize {
-		if err := db.flushWriteCache(); err != nil {
+	if db.writeBuff.size() > bulkWriteSize {
+		bo := []idOffset{}
+		if bo, err = db.writeBuff.flush(); err != nil {
 			return 0, &DbInternalError{oper: "flushing cache"}
 		}
+		db.updateBlockOffsets(bo)
 	}
 	db.keyMap[keyHash] = append(db.keyMap[keyHash], id)
 	return id, nil
 }
 
-func (db *SimpleDb[T]) flushWriteCache() (err error) {
-	if db.writeCache.queue.Len() > 0 {
-		for el := db.writeCache.queue.Front(); el != nil; el = el.Next() {
-			id := el.Value.(*itemToWrite[T]).ID
-			key := el.Value.(*itemToWrite[T]).Key
-			srlzdData := el.Value.(*itemToWrite[T]).valueSrlzd
-
-			block := NewBlock(id, key, srlzdData) // and then the payload
-			if bytesWritten, err := block.write(db.fileHandle); err != nil || uint32(bytesWritten) != block.Length {
-				return &DbInternalError{oper: "writing block", err: err}
-			}
-
-			db.blockOffsets[id] = db.currentOffset   // add to offsets map
-			db.currentOffset += uint64(block.Length) // update current offset
-			db.ItemsCount++                          // update db capacity
-
-			db.keyMap[block.KeyHash] = append(db.keyMap[block.KeyHash], block.Id)
-			el.Value = nil
+func (db *SimpleDb[T]) updateBlockOffsets(bo []idOffset) {
+	if len(bo) > 0 {
+		for i := 0; i < len(bo); i++ {
+			db.blockOffsets[bo[i].id] = db.currentOffset // add to offsets map
+			db.currentOffset += bo[i].offset
+			db.ItemsCount++ // update db capacity
 		}
-		db.writeCache.reset()
 	}
-	return
 }
 
 // Gets one key, value pair from the database for the given Id
@@ -170,19 +157,26 @@ func (db *SimpleDb[T]) getById(id ID) (key []byte, value *T, err error) {
 		return nil, nil, &NotFoundError{id: id}
 	}
 
-	// get from cache if cached
+	// maybe it is in the read cache
 	if object, ok := db.readCache.checkAndGet(id); ok {
-		if _, deleted := db.toBeDeleted[id]; !deleted { // if in cache and not deleted
-			db.readCache.touch(id) // mark as recently accessed
-			return object.Key, object.Value, nil
-		}
+		db.readCache.touch(id) // yes it's in the read cache, so mark as recently accessed
+		return object.Key, object.Value, nil
 	}
-	// if not cached must be in the file
-	if !db.has(id) {
+
+	// it may happen it is  not in the read cache
+	if db.writeBuff.has(id) { // but maybe it still in the write buffer and has not been saved yet
+		bo, err := db.writeBuff.flush() // if so, then flush the whole buffer
+		if err != nil {
+			return nil, nil, err
+		}
+		db.updateBlockOffsets(bo) // update whats in the db after flush
+	}
+
+	if !db.has(id) { // so check if it's not in the file anyway
 		return nil, nil, &NotFoundError{id: id}
 	}
 
-	// read item from the database file
+	// if it is, readit  from the database file
 	seek := db.blockLen(id)
 
 	db.fileHandle.Seek(int64(seek), io.SeekStart) // move to the right position in the file
@@ -266,32 +260,25 @@ func (db *SimpleDb[T]) Update(keyToUpdate []byte, value *T) (err error) {
 	// Update deletes the old and addsthe new item do db, and to the cache so it's automatically cached, and the freshest in the cache
 	return err
 }
-func (db *SimpleDb[T]) inCaches(id ID) bool {
-	// if the item is not in either of the two caches, market it for delete on close()
-	if !db.readCache.check(id) && !db.writeCache.check(id) {
-		return false
-	}
-	return true
-}
 
 // Marks item with a given Id for deletion, internal function, may be used for testing/benchmarking
 func (db *SimpleDb[T]) deleteById(id ID, keyHash hash.Type) error {
-
-	if !db.inCaches(id) {
-		if !db.has(id) { // should be in the file then
-			return &NotFoundError{id: id}
-		}
-		return nil
-	}
-	// else not yet in the file but in either of the two caches
-
-	// remove the item from caches, if it is there
 	if db.readCache.check(id) {
 		db.readCache.remove(id)
 	}
-	if db.writeCache.check(id) {
-		db.writeCache.remove(id)
+	if db.writeBuff.has(id) {
+		db.writeBuff.remove(id)
 	}
+
+	if !db.has(id) { // should be in the file then
+		return &NotFoundError{id: id}
+	}
+	return nil
+
+	// else not yet in the file but in either of the two caches
+
+	// remove the item from caches, if it is there
+
 	// may be still on the disk, so mark for deletion
 	db.toBeDeleted[id] = struct{}{} // set map to empty value as a flag indicating the item is to be deleted
 	// remove the item from keyMap
@@ -344,7 +331,7 @@ func (db *SimpleDb[T]) Close() (err error) {
 
 	var tmpFile = filepath.Join(DbPath, "temp.sdb")
 
-	if db.flushWriteCache() != nil {
+	if _, err := db.writeBuff.flush(); err != nil {
 		return &DbInternalError{oper: "flushing cche"}
 	}
 

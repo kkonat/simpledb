@@ -84,7 +84,7 @@ func TestAppendGetWithCache(t *testing.T) {
 	if err == nil {
 		t.Error("should not get", err)
 	}
-	db.flushWriteCache() // flush cache
+	db.writeBuff.flush() // flush cache
 	// check if can be read from disk or read cache
 	item, err = db.Get([]byte("Person1"))
 	if err != nil {
@@ -120,7 +120,7 @@ func TestBasicFunctionality(t *testing.T) {
 		t.Error("Bad id")
 	}
 	db1.Close()
-
+	db1, _ = Open[Person]("testBasicFunx", CacheSize)
 	// open another db from the same file
 	db2, err := Open[Person]("testBasicFunx", CacheSize)
 	if err != nil {
