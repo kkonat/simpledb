@@ -42,6 +42,29 @@ func TestCacheFunctions(t *testing.T) {
 	}
 }
 
+func TestCacheHitRate(t *testing.T) {
+	const N = 100
+	var CacheSize = 0.5 * N
+	var expectedHitrate = 100. * float64(CacheSize) / float64(N)
+
+	cache := newCache[benchmarkData](uint32(CacheSize))
+	reference := make(map[ID]string)
+
+	for n := 0; n < N; n++ {
+		d := NewBenchmarkData(n)
+		cache.add(&Item[benchmarkData]{ID: ID(n), Value: d})
+		reference[ID(n)] = d.Str
+	}
+
+	for n := 0; n < N/2; n++ {
+		cache.checkAndGet(ID(rand.Intn(N)))
+	}
+	hr := cache.GetHitRate()
+	if hr < expectedHitrate-5 || hr > expectedHitrate+5 {
+		t.Error("Wrong cache Hit rate: ", hr, "%, expected:", expectedHitrate, "%")
+	}
+}
+
 func BenchmarkCacheAdd(b *testing.B) {
 	b.StopTimer()
 	var (

@@ -214,14 +214,14 @@ func TestCache(t *testing.T) {
 		d   *benchmarkData
 		err error
 	)
-	const CacheSize = 100
-
+	const CacheSize = 1000
 	DeleteDbFile("benchmarkCache")
 	db, _ := Open[benchmarkData]("benchmarkCache", CacheSize)
 
 	// gen 2 x times the cache capacity
 	// so the expected hitrate is 50%
 	var numElements = int(2 * CacheSize)
+	var expectedHitrate = 100. * float64(CacheSize) / float64(numElements)
 
 	reference := make(map[ID]string)
 	for n := 0; n < numElements; n++ {
@@ -234,7 +234,6 @@ func TestCache(t *testing.T) {
 	db, _ = Open[benchmarkData]("benchmarkCache", CacheSize)
 	for n := 0; n < numElements; n++ {
 		rndNo := ID(rand.Intn(numElements))
-		log.Info(n)
 		if _, d, err = db.getById(rndNo); err != nil {
 			t.Error("get failed")
 		}
@@ -242,7 +241,10 @@ func TestCache(t *testing.T) {
 			t.Error("values dont match", rndNo)
 		}
 	}
-	log.Info("Cache Hit rate: ", db.readCache.GetHitRate(), " %")
+	hr := db.readCache.GetHitRate()
+	if hr < expectedHitrate-5 || hr > expectedHitrate+5 {
+		t.Error("Wrong cache Hit rate: ", hr, "%, expected:", expectedHitrate, "%")
+	}
 }
 
 func TestDeleteAndUpdate(t *testing.T) {
@@ -250,8 +252,8 @@ func TestDeleteAndUpdate(t *testing.T) {
 		value *benchmarkData
 		err   error
 	)
-	const CacheSize = 100
-	const N = 200
+	const CacheSize = 1000
+	const N = 2000
 
 	elements := make([]int, N)
 

@@ -59,20 +59,17 @@ func Open[T any](filename string, cacheSize uint32) (db *SimpleDb[T], err error)
 	db.mtx.Lock()
 	defer db.mtx.Unlock()
 
-	if _, err = os.Stat(DbPath); err != nil {
+	if _, err = os.Stat(DbPath); err != nil { // create subdir if does not exist
 		os.Mkdir(DbPath, 0700)
 	}
-
-	if _, err = os.Stat(db.filePath); err == nil {
-		// if db file exists
+	if _, err = os.Stat(db.filePath); err == nil { // if db file exists
 		if db.fileHandle, err = openFile(db.filePath); err != nil {
 			return nil, &DbGeneralError{err: "open"}
 		}
 		if err = db.loadDb(); err != nil {
 			return nil, &DbInternalError{oper: "reading db", err: err}
 		}
-	} else {
-		// if not, initialize empty db
+	} else { // if not, initialize empty db
 		db.blockOffsets = make(BlockOffsets)
 		db.fileHandle, err = openFile(db.filePath)
 	}
@@ -108,6 +105,7 @@ func (db *SimpleDb[T]) appendWOLock(key []byte, value *T) (id ID, err error) {
 
 	id = db.genNewId()
 	keyHash := hash.Get(key)
+
 	// Cache the newly added item in readCache
 	cacheItem := &Item[T]{
 		ID:      ID(id),
@@ -118,16 +116,16 @@ func (db *SimpleDb[T]) appendWOLock(key []byte, value *T) (id ID, err error) {
 	db.readCache.add(cacheItem)
 
 	// Cache the newly added item in writeCache
-	srlzdData, err := borsh.Serialize(value)
+	srlzdValue, err := borsh.Serialize(value)
 	if err != nil {
 		panic("todo: handle serialization failure")
 	}
-	wcItem := &itemToWrite[T]{
+	wrItem := &itemToWrite[T]{
 		ID:         ID(id),
 		Key:        key,
-		valueSrlzd: srlzdData,
+		valueSrlzd: srlzdValue,
 	}
-	db.writeCache.accumulate(wcItem)
+	db.writeCache.accumulate(wrItem)
 
 	if db.writeCache.size() > bulkWriteSize {
 		if err := db.flushWriteCache(); err != nil {
@@ -155,13 +153,9 @@ func (db *SimpleDb[T]) flushWriteCache() (err error) {
 			db.ItemsCount++                          // update db capacity
 
 			db.keyMap[block.KeyHash] = append(db.keyMap[block.KeyHash], block.Id)
-
-			// delete writecache element
-			delete(db.writeCache.queueIndx, id)
 			el.Value = nil
 		}
-
-		db.writeCache.queue.Init()
+		db.writeCache.reset()
 	}
 	return
 }

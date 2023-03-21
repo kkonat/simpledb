@@ -31,6 +31,14 @@ func (c *writeCache[T]) accumulate(item *itemToWrite[T]) {
 	c.accumulated += uint64(item.itemSize())
 }
 
+func (c *writeCache[T]) reset() {
+	c.queue.Init()
+	for k := range c.queueIndx {
+		delete(c.queueIndx, k)
+	}
+	c.accumulated = 0
+}
+
 func (c *writeCache[T]) size() uint64 {
 	return c.accumulated
 }

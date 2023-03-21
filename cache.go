@@ -36,6 +36,7 @@ func (c *cache[T]) init(CacheSize uint32) {
 	c.maxSize = CacheSize
 	c.queueIndx = make(map[ID]*list.Element)
 	c.queue = list.New()
+	c.statistics = Stats{}
 }
 
 // cleans up the cache
@@ -52,7 +53,7 @@ func (c *cache[T]) add(item *Item[T]) {
 
 	if uint32(c.queue.Len()) == c.maxSize {
 		first := c.queue.Front()
-		firstId, _ := first.Value.(ID)
+		firstId := first.Value.(*Item[T]).ID
 		delete(c.queueIndx, firstId) // delete reference first
 		c.queue.Remove(first)        // delete actual item
 	}
@@ -81,6 +82,7 @@ func (c *cache[T]) touch(id ID) {
 		return
 	}
 	el := c.queueIndx[id]
+	delete(c.queueIndx, id)
 	c.queue.Remove(el)
 	c.queue.PushBack(el.Value)
 	c.queueIndx[id] = c.queue.Back()
