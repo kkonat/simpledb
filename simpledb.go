@@ -2,6 +2,7 @@ package simpledb
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -46,6 +47,7 @@ type SimpleDb[T any] struct {
 
 // creates a new database or opens an existing one
 func Open[T any](filename string, cacheSize uint32) (db *SimpleDb[T], err error) {
+
 	if cacheSize < 1 {
 		panic("cache size must be non-zero")
 	}
@@ -66,7 +68,7 @@ func Open[T any](filename string, cacheSize uint32) (db *SimpleDb[T], err error)
 			return nil, &DbGeneralError{err: "open"}
 		}
 
-		db.writeBuff = newWriteCache(db.fileHandle)
+		db.writeBuff = newWriteBuff(db.fileHandle)
 
 		if err = db.loadDb(); err != nil {
 			return nil, &DbInternalError{oper: "reading db", err: err}
@@ -74,7 +76,7 @@ func Open[T any](filename string, cacheSize uint32) (db *SimpleDb[T], err error)
 	} else { // if not, initialize empty db
 		db.blockOffsets = make(BlockOffsets)
 		db.fileHandle, err = openFile(db.filePath)
-		db.writeBuff = newWriteCache(db.fileHandle)
+		db.writeBuff = newWriteBuff(db.fileHandle)
 	}
 	return
 }
@@ -124,7 +126,7 @@ func (db *SimpleDb[T]) appendWOLock(key []byte, value *T) (id ID, err error) {
 		panic("todo: handle serialization failure")
 	}
 	block := NewBlock(id, key, srlzdValue)
-	db.writeBuff.grow(id, block.getBytes())
+	db.writeBuff.append(id, block.getBytes())
 
 	if db.writeBuff.size() > writeBuffSize {
 		var blockOffsets []idOffset
@@ -180,10 +182,12 @@ func (db *SimpleDb[T]) getById(id ID) (key []byte, value *T, err error) {
 
 	db.fileHandle.Seek(int64(seek), io.SeekStart) // move to the right position in the file
 	header := blockHeader{}
-
+	fmt.Printf("seek: %v	", seek)
 	if err = header.read(db.fileHandle); err != nil { // read OffsL bytes
+		fmt.Printf(" ERROR %v	", err)
 		return nil, nil, err
 	}
+	// fmt.Printf("header: %+v\n", header)
 	buff := make([]byte, header.Length)
 
 	db.fileHandle.Seek(int64(seek), io.SeekStart)
@@ -191,6 +195,7 @@ func (db *SimpleDb[T]) getById(id ID) (key []byte, value *T, err error) {
 		return nil, nil, err
 	}
 	block := &block{}
+
 	block.setBytes(buff)
 
 	key = block.key
@@ -222,7 +227,9 @@ func (db *SimpleDb[T]) Get(searchedKey []byte) (val *T, err error) {
 	if !ok {
 		return nil, &NotFoundError{}
 	}
-
+	if len(idCandidates) > 1 {
+		fmt.Println("hash Collisions: ", len(idCandidates))
+	}
 	for _, candidate := range idCandidates {
 		candidateKey, val, err = db.getById(candidate) // get actual keys
 		if err == nil && keysEqual(candidateKey, searchedKey) {
@@ -472,12 +479,12 @@ func (db *SimpleDb[T]) has(id ID) (ok bool) {
 	return
 }
 
-// returns lenght of a block of an item with the given ID in the database, reads this data from RAM
 func (db *SimpleDb[T]) blockLen(id ID) uint64 {
 	offs, ok := db.blockOffsets[id]
 	if !ok {
 		// panics, because this func must be called from after the has() check
 		panic("item never created")
 	}
+	fmt.Println("block id:", id, " offs:", offs)
 	return offs
 }

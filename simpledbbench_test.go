@@ -54,8 +54,8 @@ func BenchmarkDeleteAndUpdate(b *testing.B) {
 		err   error
 	)
 
-	var N = 1 + b.N
-	var CacheSize = 1 + uint32(N/2)
+	var N = b.N
+	var CacheSize = uint32(N/2) + 1
 	log.Info("N=", N)
 
 	elements := make([]int, N)
@@ -74,7 +74,7 @@ func BenchmarkDeleteAndUpdate(b *testing.B) {
 	}
 	db.Close()
 
-	// modify half
+	// modify half of the db
 	db, _ = Open[benchmarkData]("delLogic", CacheSize)
 	for n := 0; n < N/2; n++ {
 		x := rand.Intn(N)
