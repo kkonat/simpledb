@@ -16,7 +16,7 @@ import (
 const (
 	DbPath        = "./db"
 	DbExt         = ".sdb"
-	bulkWriteSize = uint64(16 * 1024)
+	writeBuffSize = uint64(16 * 1024)
 )
 
 func init() {
@@ -126,24 +126,23 @@ func (db *SimpleDb[T]) appendWOLock(key []byte, value *T) (id ID, err error) {
 	block := NewBlock(id, key, srlzdValue)
 	db.writeBuff.grow(id, block.getBytes())
 
-	if db.writeBuff.size() > bulkWriteSize {
-		bo := []idOffset{}
-		if bo, err = db.writeBuff.flush(); err != nil {
+	if db.writeBuff.size() > writeBuffSize {
+		var blockOffsets []idOffset
+
+		if blockOffsets, err = db.writeBuff.flush(); err != nil {
 			return 0, &DbInternalError{oper: "flushing cache"}
 		}
-		db.updateBlockOffsets(bo)
+		db.updateBlockOffsets(blockOffsets)
 	}
 	db.keyMap[keyHash] = append(db.keyMap[keyHash], id)
 	return id, nil
 }
 
 func (db *SimpleDb[T]) updateBlockOffsets(bo []idOffset) {
-	if len(bo) > 0 {
-		for i := 0; i < len(bo); i++ {
-			db.blockOffsets[bo[i].id] = db.currentOffset // add to offsets map
-			db.currentOffset += bo[i].offset
-			db.ItemsCount++ // update db capacity
-		}
+	for i := 0; i < len(bo); i++ {
+		db.blockOffsets[bo[i].id] = db.currentOffset // add to offsets map
+		db.currentOffset += bo[i].offset
+		db.ItemsCount++ // update db capacity
 	}
 }
 

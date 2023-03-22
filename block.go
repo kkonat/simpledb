@@ -14,7 +14,6 @@ type blockHeader struct {
 	Id      ID
 	KeyHash hash.Type
 	KeyLen  uint32 // can not be uint16, data is 32-bit word-aligned anyway, sizeof will return untrue no. of bytes
-	DataLen uint32 // can not be uint
 }
 
 func (b *blockHeader) read(file *os.File) (err error) {
@@ -44,16 +43,12 @@ func NewBlock(id ID, key []byte, value []byte) *block {
 		Id:      id,
 		KeyHash: hash.Get(key),
 		KeyLen:  uint32(len(key)),
-		DataLen: uint32(len(value)),
 		Length:  uint32(blockLen),
 	}
 	block := &block{blockHeader: header, key: key, value: value}
 	return block
 }
 
-func (b *block) write(file *os.File) (bytesWritten int, err error) {
-	return file.Write(b.getBytes())
-}
 func (b *block) getBytes() []byte {
 	headerBytes := b.blockHeader.getBytes()
 	blockBytes := append(headerBytes, b.key...)
