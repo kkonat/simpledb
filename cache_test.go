@@ -43,7 +43,7 @@ func TestCacheFunctions(t *testing.T) {
 }
 
 func TestCacheHitRate(t *testing.T) {
-	const N = 100
+	const N = 1000
 	var CacheSize = 0.5 * N
 	var expectedHitrate = 100. * float64(CacheSize) / float64(N)
 

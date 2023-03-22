@@ -273,7 +273,6 @@ func (db *SimpleDb[T]) deleteById(id ID, keyHash hash.Type) error {
 	if !db.has(id) { // should be in the file then
 		return &NotFoundError{id: id}
 	}
-	return nil
 
 	// else not yet in the file but in either of the two caches
 
@@ -330,7 +329,6 @@ func (db *SimpleDb[T]) Close() (err error) {
 	var bytesWritten uint64
 
 	var tmpFile = filepath.Join(DbPath, "temp.sdb")
-
 	if _, err := db.writeBuff.flush(); err != nil {
 		return &DbInternalError{oper: "flushing cche"}
 	}
@@ -338,31 +336,26 @@ func (db *SimpleDb[T]) Close() (err error) {
 	if err = db.fileHandle.Close(); err != nil {
 		return &DbInternalError{oper: "closing: %w", err: err}
 	}
-
-	if len(db.toBeDeleted) == 0 {
-		return nil
-	}
-
-	if bytesWritten, err = db.copyOmittingDeleted(tmpFile); err != nil {
-		return &DbInternalError{oper: "copyomitting: %w", err: err}
-	}
-
-	// substitute the temp file for the datbase file
-	if err := os.Remove(db.filePath); err != nil {
-		return &DbInternalError{oper: "removing db file: %w", err: err}
-	}
-
-	if bytesWritten == 0 {
-		if err := os.Remove(tmpFile); err != nil {
-			return &DbInternalError{oper: "removing tmp file: %w", err: err}
+	if len(db.toBeDeleted) != 0 {
+		if bytesWritten, err = db.copyOmittingDeleted(tmpFile); err != nil {
+			return &DbInternalError{oper: "copyomitting: %w", err: err}
 		}
-		return nil
-	}
+		if bytesWritten == 0 {
+			if err := os.Remove(tmpFile); err != nil {
+				return &DbInternalError{oper: "removing tmp file: %w", err: err}
+			}
+			return nil
+		}
 
-	if err := os.Rename(tmpFile, db.filePath); err != nil {
-		return &DbInternalError{oper: "renaming tmp to db file: %w", err: err}
-	}
+		// substitute the temp file for the datbase file
+		if err := os.Remove(db.filePath); err != nil {
+			return &DbInternalError{oper: "removing db file: %w", err: err}
+		}
 
+		if err := os.Rename(tmpFile, db.filePath); err != nil {
+			return &DbInternalError{oper: "renaming tmp to db file: %w", err: err}
+		}
+	}
 	db.readCache.cleanup()
 
 	// invalidate all internal structs

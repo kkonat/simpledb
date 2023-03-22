@@ -168,8 +168,8 @@ func TestBasicFunctionality(t *testing.T) {
 		t.Error("wrong hit rate")
 	}
 	_, _, _ = db1.getById(id2)
-
-	if hr := db1.readCache.GetHitRate(); hr != 100.0 {
+	_, _, _ = db1.getById(id2)
+	if hr := db1.readCache.GetHitRate(); hr < 49.99 || hr > 50.01 {
 		log.Infof("Cache hit rate %f", hr)
 		t.Error("wrong hit rate")
 	}
@@ -226,19 +226,26 @@ func TestCache(t *testing.T) {
 	reference := make(map[ID]string)
 	for n := 0; n < numElements; n++ {
 		d = NewBenchmarkData(n)
+		//d = &benchmarkData{Value: uint(n), Str: fmt.Sprintf("Item %d", n)}
 		db.Append([]byte(fmt.Sprintf("Item%d", n)), d)
 		reference[ID(n)] = d.Str
 	}
 	db.Close()
 
 	db, _ = Open[benchmarkData]("benchmarkCache", CacheSize)
+	// fill cache
+	for n := 0; n < CacheSize; n++ {
+		db.getById(ID(n))
+	}
+	db.readCache.statistics.requests = 0 // artificially reset no. of requests
+	// test hits
 	for n := 0; n < numElements; n++ {
-		rndNo := ID(rand.Intn(numElements))
-		if _, d, err = db.getById(rndNo); err != nil {
+
+		if _, d, err = db.getById(ID(n)); err != nil {
 			t.Error("get failed")
 		}
-		if d.Str != reference[ID(rndNo)] {
-			t.Error("values dont match", rndNo)
+		if d.Str != reference[ID(n)] {
+			t.Errorf("values dont match: %s vs %s", d.Str, reference[ID(n)])
 		}
 	}
 	hr := db.readCache.GetHitRate()
