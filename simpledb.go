@@ -124,7 +124,7 @@ func (db *SimpleDb[T]) appendWOLock(key []byte, value *T) (id ID, err error) {
 		panic("todo: handle serialization failure")
 	}
 	block := NewBlock(id, key, srlzdValue)
-	db.writeBuff.grow(id, block.getBytes())
+	db.writeBuff.append(id, block.getBytes())
 
 	if db.writeBuff.size() > bulkWriteSize {
 		bo := []idOffset{}

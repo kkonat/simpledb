@@ -61,7 +61,7 @@ func TestBuff(t *testing.T) {
 		noBytes := len(blockBytes)
 
 		// append to the write buffer
-		wb.grow(id, blockBytes)
+		wb.append(id, blockBytes)
 
 		// store data for verification
 		globalCheck = append(globalCheck,
