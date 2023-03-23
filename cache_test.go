@@ -24,7 +24,7 @@ func TestCacheFunctions(t *testing.T) {
 
 	for n := 0; n < len(reference); n++ {
 		d, ok := cache.checkAndGet(ID(n))
-		if !ok || reference[ID(n)] != (*d).Value.Str {
+		if !ok || reference[ID(n)] != d.Value.Str {
 			t.Error("Data mismatch")
 		}
 	}
@@ -36,12 +36,34 @@ func TestCacheFunctions(t *testing.T) {
 
 	for id, str := range reference {
 		cacheItem, ok := cache.checkAndGet(ID(id))
-		if !ok || str != (*cacheItem).Value.Str {
+		if !ok || str != cacheItem.Value.Str {
 			t.Error("Data mismatch")
 		}
 	}
 }
 
+func TestCacheHitRate(t *testing.T) {
+	const N = 1000
+	var CacheSize = 0.5 * N
+	var expectedHitrate = 100. * float64(CacheSize) / float64(N)
+
+	cache := newCache[benchmarkData](uint32(CacheSize))
+	reference := make(map[ID]string)
+
+	for n := 0; n < N; n++ {
+		d := NewBenchmarkData(n)
+		cache.add(&Item[benchmarkData]{ID: ID(n), Value: d})
+		reference[ID(n)] = d.Str
+	}
+
+	for n := 0; n < N/2; n++ {
+		cache.checkAndGet(ID(rand.Intn(N)))
+	}
+	hr := cache.GetHitRate()
+	if hr < expectedHitrate-5 || hr > expectedHitrate+5 {
+		t.Error("Wrong cache Hit rate: ", hr, "%, expected:", expectedHitrate, "%")
+	}
+}
 
 func BenchmarkCacheAdd(b *testing.B) {
 	b.StopTimer()
@@ -135,7 +157,7 @@ func BenchmarkCacheRemove(b *testing.B) {
 			reference = reference[:left-1]
 		}
 
-		cache.removeItem(ID(item))
+		cache.remove(ID(item))
 		// log.Info(item)
 	}
 }

@@ -45,7 +45,7 @@ func BenchmarkPerfWithCache(b *testing.B) {
 		}
 	}
 	db.Close()
-	log.Info("-> ", b.N, " iterations. Cache Hit rate: ", db.cache.GetHitRate(), " %")
+	log.Info("-> ", b.N, " iterations. Cache Hit rate: ", db.readCache.GetHitRate(), " %")
 }
 
 func BenchmarkDeleteAndUpdate(b *testing.B) {

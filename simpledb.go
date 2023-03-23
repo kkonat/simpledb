@@ -3,7 +3,6 @@ package simpledb
 import (
 	"errors"
 	"io"
-	"math"
 	"os"
 	"path/filepath"
 	"sync"
@@ -15,8 +14,9 @@ import (
 )
 
 const (
-	DbPath = "./db"
-	DbExt  = ".sdb"
+	DbPath        = "./db"
+	DbExt         = ".sdb"
+	bulkWriteSize = uint64(16 * 1024)
 )
 
 func init() {
@@ -33,11 +33,12 @@ type SimpleDb[T any] struct {
 	filePath   string
 	fileHandle *os.File
 
-	cache         *cache[T]
+	readCache     *cache[T]
+	writeBuff     *writeBuff
 	ItemsCount    uint64
 	currentOffset uint64 // as blocks may be up to  4GB long, the file length/index must be at least uint64
 	maxId         ID
-	deleted       DeleteFlags
+	toBeDeleted   DeleteFlags
 	blockOffsets  BlockOffsets
 	keyMap        HashIDs
 	mtx           sync.RWMutex
@@ -45,32 +46,35 @@ type SimpleDb[T any] struct {
 
 // creates a new database or opens an existing one
 func Open[T any](filename string, cacheSize uint32) (db *SimpleDb[T], err error) {
-
+	if cacheSize < 1 {
+		panic("cache size must be non-zero")
+	}
 	db = &SimpleDb[T]{
-		filePath: getFilepath(filename),
-		cache:    newCache[T](cacheSize),
-		keyMap:   make(HashIDs, 0),
-		deleted:  make(DeleteFlags),
+		filePath:    getFilepath(filename),
+		readCache:   newCache[T](cacheSize),
+		keyMap:      make(HashIDs, 0),
+		toBeDeleted: make(DeleteFlags),
 	}
 	db.mtx.Lock()
 	defer db.mtx.Unlock()
 
-	if _, err = os.Stat(DbPath); err != nil {
+	if _, err = os.Stat(DbPath); err != nil { // create subdir if does not exist
 		os.Mkdir(DbPath, 0700)
 	}
-
-	if _, err = os.Stat(db.filePath); err == nil {
-		// if db file exists
+	if _, err = os.Stat(db.filePath); err == nil { // if db file exists
 		if db.fileHandle, err = openFile(db.filePath); err != nil {
 			return nil, &DbGeneralError{err: "open"}
 		}
+
+		db.writeBuff = newWriteBuff()
+
 		if err = db.loadDb(); err != nil {
 			return nil, &DbInternalError{oper: "reading db", err: err}
 		}
-	} else {
-		// if not, initialize empty db
+	} else { // if not, initialize empty db
 		db.blockOffsets = make(BlockOffsets)
 		db.fileHandle, err = openFile(db.filePath)
+		db.writeBuff = newWriteBuff()
 	}
 	return
 }
@@ -102,37 +106,43 @@ func (db *SimpleDb[T]) Append(key []byte, value *T) (id ID, err error) {
 
 func (db *SimpleDb[T]) appendWOLock(key []byte, value *T) (id ID, err error) {
 
-	var payload []byte
-	if payload, err = borsh.Serialize(value); err != nil {
-		return 0, &DbInternalError{oper: "serializing", err: err}
-	}
-	if len(payload) > math.MaxUint32 { // payload must not be too large, ha ha
-		panic("payload too large")
-	}
-
 	id = db.genNewId()
+	keyHash := hash.Get(key)
 
-	block := NewBlock(id, key, payload) // and then the payload
-
-	// write whole block  at once
-	if bytesWritten, err := block.write(db.fileHandle); err != nil || uint32(bytesWritten) != block.Length {
-		return 0, &DbInternalError{oper: "writing block", err: err}
-	}
-
-	db.blockOffsets[id] = db.currentOffset   // add to offsets map
-	db.currentOffset += uint64(block.Length) // update current offset
-	db.ItemsCount++                          // update db capacity
-
-	db.keyMap[block.KeyHash] = append(db.keyMap[block.KeyHash], block.Id)
-	// Cache the newly added item
-	db.cache.addItem(&Item[T]{
-		ID:      ID(block.Id),
+	// Cache the newly added item in readCache
+	cacheItem := &Item[T]{
+		ID:      ID(id),
 		Key:     key,
-		KeyHash: block.KeyHash,
+		KeyHash: keyHash,
 		Value:   value,
-	})
+	}
+	db.readCache.add(cacheItem)
 
+	// Cache the newly added item in writeCache
+	srlzdValue, err := borsh.Serialize(value)
+	if err != nil {
+		panic("todo: handle serialization failure")
+	}
+	block := NewBlock(id, key, srlzdValue)
+	db.writeBuff.append(id, block.getBytes())
+
+	if db.writeBuff.size() > bulkWriteSize {
+		bo := []idOffset{}
+		if bo, err = db.writeBuff.flush(db.fileHandle); err != nil {
+			return 0, &DbInternalError{oper: "flushing cache"}
+		}
+		db.updateBlockOffsets(bo)
+	}
+	db.keyMap[keyHash] = append(db.keyMap[keyHash], id)
 	return id, nil
+}
+
+func (db *SimpleDb[T]) updateBlockOffsets(bo []idOffset) {
+	for i := 0; i < len(bo); i++ {
+		db.blockOffsets[bo[i].id] = db.currentOffset // add to offsets map
+		db.currentOffset += bo[i].offset
+		db.ItemsCount++ // update db capacity
+	}
 }
 
 // Gets one key, value pair from the database for the given Id
@@ -140,24 +150,31 @@ func (db *SimpleDb[T]) appendWOLock(key []byte, value *T) (id ID, err error) {
 // Id is also an internal idenifier which  may change on subsequent item updates
 func (db *SimpleDb[T]) getById(id ID) (key []byte, value *T, err error) {
 
-	if !db.has(id) {
-		return nil, nil, &NotFoundError{id: id}
-	}
-
-	// get from cache if cached
-	if object, ok := db.cache.checkaAndGetItem(id); ok {
-		if _, ok := db.deleted[id]; !ok { // if in cache and not deleted
-			db.cache.touch(id) // mark as recently accessed
-			return object.Key, object.Value, nil
-		}
-	}
-
 	// check if the item has not been markedad deleted
-	if _, ok := db.deleted[id]; ok {
+	if _, ok := db.toBeDeleted[id]; ok {
 		return nil, nil, &NotFoundError{id: id}
 	}
 
-	// or else, read data item from the database file
+	// maybe it is in the read cache
+	if object, ok := db.readCache.checkAndGet(id); ok {
+		db.readCache.touch(id) // yes it's in the read cache, so mark as recently accessed
+		return object.Key, object.Value, nil
+	}
+
+	// it may happen it is  not in the read cache
+	if db.writeBuff.has(id) { // but maybe it still in the write buffer and has not been saved yet
+		bo, err := db.writeBuff.flush(db.fileHandle) // if so, then flush the whole buffer
+		if err != nil {
+			return nil, nil, err
+		}
+		db.updateBlockOffsets(bo) // update whats in the db after flush
+	}
+
+	if !db.has(id) { // so check if it's not in the file anyway
+		return nil, nil, &NotFoundError{id: id}
+	}
+
+	// if it is, readit  from the database file
 	seek := db.blockLen(id)
 
 	db.fileHandle.Seek(int64(seek), io.SeekStart) // move to the right position in the file
@@ -183,13 +200,12 @@ func (db *SimpleDb[T]) getById(id ID) (key []byte, value *T, err error) {
 	}
 
 	// create db Item for caching
-	db.cache.addItem(&Item[T]{
+	db.readCache.add(&Item[T]{
 		ID:      ID(block.Id),
 		KeyHash: block.KeyHash,
 		Key:     key,
 		Value:   value,
 	})
-
 	return
 }
 
@@ -245,23 +261,23 @@ func (db *SimpleDb[T]) Update(keyToUpdate []byte, value *T) (err error) {
 
 // Marks item with a given Id for deletion, internal function, may be used for testing/benchmarking
 func (db *SimpleDb[T]) deleteById(id ID, keyHash hash.Type) error {
+	if db.readCache.check(id) {
+		db.readCache.remove(id)
+	}
+	if db.writeBuff.has(id) {
+		db.writeBuff.remove(id)
+	}
 
-	if !db.has(id) {
+	if !db.has(id) { // should be in the file then
 		return &NotFoundError{id: id}
 	}
 
-	//  TODO: remove this check in future, permit multiple deletes, now convenient for testing
-	if _, ok := db.deleted[id]; ok {
-		return &DbGeneralError{err: "item already deleted"} // TODO: fail gracefully here instead of error
-	} else {
-		db.deleted[id] = struct{}{} // set map to empty value as a flag indicating the item is to be deleted
-	}
+	// else not yet in the file but in either of the two caches
 
-	// remove the item from cache, if it is there
-	if cachedItem, ok := db.cache.checkaAndGetItem(id); ok {
-		db.cache.removeItem(cachedItem.ID)
-	}
+	// remove the item from caches, if it is there
 
+	// may be still on the disk, so mark for deletion
+	db.toBeDeleted[id] = struct{}{} // set map to empty value as a flag indicating the item is to be deleted
 	// remove the item from keyMap
 
 	// this part is the reason  why keyHash must be passed to this method, anyway it is usually known to the calling function
@@ -311,40 +327,38 @@ func (db *SimpleDb[T]) Close() (err error) {
 	var bytesWritten uint64
 
 	var tmpFile = filepath.Join(DbPath, "temp.sdb")
+	if _, err := db.writeBuff.flush(db.fileHandle); err != nil {
+		return &DbInternalError{oper: "flushing cche"}
+	}
 
 	if err = db.fileHandle.Close(); err != nil {
 		return &DbInternalError{oper: "closing: %w", err: err}
 	}
-
-	if len(db.deleted) == 0 {
-		return nil
-	}
-
-	if bytesWritten, err = db.copyOmittingDeleted(tmpFile); err != nil {
-		return &DbInternalError{oper: "copyomitting: %w", err: err}
-	}
-
-	// substitute the temp file for the datbase file
-	if err := os.Remove(db.filePath); err != nil {
-		return &DbInternalError{oper: "removing db file: %w", err: err}
-	}
-
-	if bytesWritten == 0 {
-		if err := os.Remove(tmpFile); err != nil {
-			return &DbInternalError{oper: "removing tmp file: %w", err: err}
+	if len(db.toBeDeleted) != 0 {
+		if bytesWritten, err = db.copyOmittingDeleted(tmpFile); err != nil {
+			return &DbInternalError{oper: "copyomitting: %w", err: err}
 		}
-		return nil
-	}
+		if bytesWritten == 0 {
+			if err := os.Remove(tmpFile); err != nil {
+				return &DbInternalError{oper: "removing tmp file: %w", err: err}
+			}
+			return nil
+		}
 
-	if err := os.Rename(tmpFile, db.filePath); err != nil {
-		return &DbInternalError{oper: "renaming tmp to db file: %w", err: err}
-	}
+		// substitute the temp file for the datbase file
+		if err := os.Remove(db.filePath); err != nil {
+			return &DbInternalError{oper: "removing db file: %w", err: err}
+		}
 
-	db.cache.cleanup()
+		if err := os.Rename(tmpFile, db.filePath); err != nil {
+			return &DbInternalError{oper: "renaming tmp to db file: %w", err: err}
+		}
+	}
+	db.readCache.cleanup()
 
 	// invalidate all internal structs
 	db.blockOffsets = nil
-	db.deleted = nil
+	db.toBeDeleted = nil
 	for k := range db.keyMap {
 		delete(db.keyMap, k)
 	}
@@ -384,7 +398,7 @@ loop:
 				return 0, err
 			}
 		}
-		if _, ok := db.deleted[ID(header.Id)]; !ok {
+		if _, ok := db.toBeDeleted[ID(header.Id)]; !ok {
 			buff := make([]byte, header.Length)
 			if _, err = src.Seek(curpos, 0); err != nil {
 				return 0, err

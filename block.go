@@ -20,6 +20,10 @@ type blockHeader struct {
 func (b *blockHeader) read(file *os.File) (err error) {
 	return binary.Read(file, binary.LittleEndian, b)
 }
+func blockheadersSize() int {
+	return int(unsafe.Sizeof(blockHeader{}))
+}
+
 func (b *blockHeader) getBytes() (header []byte) {
 	buff := bytes.NewBuffer(header)
 	binary.Write(buff, binary.LittleEndian, b)
@@ -34,7 +38,7 @@ type block struct {
 
 func NewBlock(id ID, key []byte, value []byte) *block {
 	var header blockHeader
-	headerLen := int(unsafe.Sizeof(header))
+	headerLen := blockheadersSize()
 	blockLen := headerLen + len(key) + len(value)
 	header = blockHeader{
 		Id:      id,
@@ -46,6 +50,7 @@ func NewBlock(id ID, key []byte, value []byte) *block {
 	block := &block{blockHeader: header, key: key, value: value}
 	return block
 }
+
 func (b *block) write(file *os.File) (bytesWritten int, err error) {
 	return file.Write(b.getBytes())
 }
