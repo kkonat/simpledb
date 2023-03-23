@@ -66,7 +66,7 @@ func Open[T any](filename string, cacheSize uint32) (db *SimpleDb[T], err error)
 			return nil, &DbGeneralError{err: "open"}
 		}
 
-		db.writeBuff = newWriteBuff(db.fileHandle)
+		db.writeBuff = newWriteBuff()
 
 		if err = db.loadDb(); err != nil {
 			return nil, &DbInternalError{oper: "reading db", err: err}
@@ -74,7 +74,7 @@ func Open[T any](filename string, cacheSize uint32) (db *SimpleDb[T], err error)
 	} else { // if not, initialize empty db
 		db.blockOffsets = make(BlockOffsets)
 		db.fileHandle, err = openFile(db.filePath)
-		db.writeBuff = newWriteBuff(db.fileHandle)
+		db.writeBuff = newWriteBuff()
 	}
 	return
 }
@@ -127,8 +127,8 @@ func (db *SimpleDb[T]) appendWOLock(key []byte, value *T) (id ID, err error) {
 	db.writeBuff.append(id, block.getBytes())
 
 	if db.writeBuff.size() > bulkWriteSize {
-		var bo []idOffset
-		if bo, err = db.writeBuff.flush(); err != nil {
+		bo := []idOffset{}
+		if bo, err = db.writeBuff.flush(db.fileHandle); err != nil {
 			return 0, &DbInternalError{oper: "flushing cache"}
 		}
 		db.updateBlockOffsets(bo)
@@ -163,7 +163,7 @@ func (db *SimpleDb[T]) getById(id ID) (key []byte, value *T, err error) {
 
 	// it may happen it is  not in the read cache
 	if db.writeBuff.has(id) { // but maybe it still in the write buffer and has not been saved yet
-		bo, err := db.writeBuff.flush() // if so, then flush the whole buffer
+		bo, err := db.writeBuff.flush(db.fileHandle) // if so, then flush the whole buffer
 		if err != nil {
 			return nil, nil, err
 		}
@@ -327,7 +327,7 @@ func (db *SimpleDb[T]) Close() (err error) {
 	var bytesWritten uint64
 
 	var tmpFile = filepath.Join(DbPath, "temp.sdb")
-	if _, err := db.writeBuff.flush(); err != nil {
+	if _, err := db.writeBuff.flush(db.fileHandle); err != nil {
 		return &DbInternalError{oper: "flushing cche"}
 	}
 

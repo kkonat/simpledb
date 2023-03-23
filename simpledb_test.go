@@ -84,7 +84,7 @@ func TestAppendGetWithCache(t *testing.T) {
 	if err == nil {
 		t.Error("should not get", err)
 	}
-	db.writeBuff.flush() // flush cache
+	db.writeBuff.flush(db.fileHandle) // flush cache
 	// check if can be read from disk or read cache
 	item, err = db.Get([]byte("Person1"))
 	if err != nil {

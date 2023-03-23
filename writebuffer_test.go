@@ -46,7 +46,7 @@ func TestBuff(t *testing.T) {
 
 	// create write buffer
 	file, _ := openFile(filename)
-	wb := newWriteBuff(file)
+	wb := newWriteBuff()
 
 	// store N items
 	for i := 0; i < N; i++ {
@@ -83,7 +83,7 @@ func TestBuff(t *testing.T) {
 
 		// write buffered data when flushLimit exceeded
 		if accumulated > flushLimit {
-			bo, _ := wb.flush() // flush
+			bo, _ := wb.flush(file) // flush
 
 			// verify if flush returns correct data
 			for j := 0; j < len(bo); j++ {
@@ -106,7 +106,7 @@ func TestBuff(t *testing.T) {
 			wb.reset()
 		}
 	}
-	wb.flush()
+	wb.flush(file)
 	file.Close()
 	// finish saving the datafile
 

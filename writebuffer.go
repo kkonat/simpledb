@@ -2,7 +2,7 @@ package simpledb
 
 import "os"
 
-// This is a sort-of bufio.Writer, but performing specific work on buffer flush
+// This is a sort-of a bufio.Writer, but it performs  specific work on buffer flush, which bufio can't
 // it. the database must know what is still in the buffer and has not been saved to disk
 
 type buffItem struct {
@@ -11,16 +11,14 @@ type buffItem struct {
 }
 type writeBuff struct {
 	buffered    map[ID]*buffItem
+	addedIDs    []ID
 	accumulated uint64
-	file        *os.File
 }
 
-func newWriteBuff(file *os.File) (c *writeBuff) {
-	c = &writeBuff{}
-	c.file = file
-	c.reset()
-
-	return
+func newWriteBuff() *writeBuff {
+	wb := &writeBuff{}
+	wb.reset()
+	return wb
 }
 
 func (b *writeBuff) append(id ID, data []byte) {
@@ -28,6 +26,7 @@ func (b *writeBuff) append(id ID, data []byte) {
 		data: data,
 	}
 	b.buffered[id] = &bi
+	b.addedIDs = append(b.addedIDs, id)
 	b.accumulated += uint64(len(data))
 }
 
@@ -41,6 +40,7 @@ func (b *writeBuff) has(id ID) bool {
 
 func (b *writeBuff) reset() {
 	b.buffered = make(map[ID]*buffItem)
+	b.addedIDs = make([]ID, 0)
 	b.accumulated = 0
 }
 
@@ -53,11 +53,12 @@ type idOffset struct {
 	offset uint64
 }
 
-func (b *writeBuff) flush() (bo []idOffset, err error) {
+func (b *writeBuff) flush(file *os.File) (bo []idOffset, err error) {
 	currentOffset := uint64(0)
-	for id, bi := range b.buffered {
+	for _, id := range b.addedIDs {
+		bi := b.buffered[id]
 		if !bi.deleted {
-			if _, err = b.file.Write(bi.data); err != nil {
+			if _, err = file.Write(bi.data); err != nil {
 				return
 			}
 			bo = append(bo, idOffset{id, currentOffset})
