@@ -13,7 +13,7 @@ type writeBuff struct {
 	file        *os.File
 }
 
-func newWriteCache(file *os.File) (c *writeBuff) {
+func newWriteBuff(file *os.File) (c *writeBuff) {
 	c = &writeBuff{}
 	c.file = file
 	c.reset()
@@ -41,6 +41,7 @@ func (b *writeBuff) reset() {
 	b.blockIDs = make([]ID, 0)
 	b.buffered = make(map[ID]struct{})
 	b.deleted = make(map[ID]struct{})
+	b.accumulated = 0
 }
 
 func (b *writeBuff) size() uint64 {

@@ -66,7 +66,7 @@ func Open[T any](filename string, cacheSize uint32) (db *SimpleDb[T], err error)
 			return nil, &DbGeneralError{err: "open"}
 		}
 
-		db.writeBuff = newWriteCache(db.fileHandle)
+		db.writeBuff = newWriteBuff(db.fileHandle)
 
 		if err = db.loadDb(); err != nil {
 			return nil, &DbInternalError{oper: "reading db", err: err}
@@ -74,7 +74,7 @@ func Open[T any](filename string, cacheSize uint32) (db *SimpleDb[T], err error)
 	} else { // if not, initialize empty db
 		db.blockOffsets = make(BlockOffsets)
 		db.fileHandle, err = openFile(db.filePath)
-		db.writeBuff = newWriteCache(db.fileHandle)
+		db.writeBuff = newWriteBuff(db.fileHandle)
 	}
 	return
 }
