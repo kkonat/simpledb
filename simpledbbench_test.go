@@ -54,7 +54,7 @@ func BenchmarkDeleteAndUpdate(b *testing.B) {
 		err   error
 	)
 	//var N = 600
-	var N = 1 + b.N
+	var N = b.N
 	var CacheSize = 1 + uint32(N/2)
 	log.Info("N=", N)
 

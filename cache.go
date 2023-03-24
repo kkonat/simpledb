@@ -34,7 +34,7 @@ func newCache[T any](CacheSize uint32) (c *cache[T]) {
 func (c *cache[T]) init(CacheSize uint32) {
 	// only create the map and slice, if cache is actually created
 	c.maxSize = CacheSize
-	c.queueIndx = make(map[ID]*list.Element)
+	c.queueIndx = make(map[ID]*list.Element, CacheSize)
 	c.queue = list.New()
 	c.statistics = stats{}
 }

@@ -126,22 +126,27 @@ func (db *SimpleDb[T]) appendItem(key string, value *T) (id ID, err error) {
 		panic("todo: handle serialization failure")
 	}
 	block := NewBlock(id, key, srlzdValue)
-	w, err := db.file.Write(block.getBytes())
-	if err != nil {
-		return 0, err
-	}
-	db.blockOffsets[id] = db.currentOffset
-	db.currentOffset += int64(w)
-	db.ItemsCount++
-	// db.writeBuff.append(id, block.getBytes())
 
-	// if db.writeBuff.size() > bulkWriteSize {
-	// 	if bo, err := db.writeBuff.flush(db.file); err != nil {
-	// 		return 0, &DbInternalError{oper: "flushing cache"}
-	// 	} else {
-	// 		db.updateBlockOffsets(bo)
-	// 	}
+	// w, err := db.file.Write(block.getBytes())
+	// if err != nil {
+	// 	return 0, err
 	// }
+
+	// db.blockOffsets[id] = db.currentOffset
+	// db.currentOffset += int64(w)
+	// db.ItemsCount++
+
+	db.writeBuff.append(id, block.getBytes())
+	if db.writeBuff.size() > bulkWriteSize {
+		if bo, err := db.writeBuff.flush(db.file); err != nil {
+			return 0, &DbInternalError{oper: "flushing cache"}
+		} else {
+			db.updateBlockOffsets(bo)
+		}
+	}
+	if db.keyHashItems[keyHash] == nil {
+		db.keyHashItems[keyHash] = make([]ID, 16)
+	}
 	db.keyHashItems[keyHash] = append(db.keyHashItems[keyHash], id)
 	return id, nil
 }
@@ -179,7 +184,6 @@ func (db *SimpleDb[T]) getItem(id ID) (key string, value *T, err error) {
 	if !db.contains(id) { // re-check if it is now in the file
 		return "", nil, &NotFoundError{id: id}
 	}
-
 	// if it is, read it from the  file
 	offset := db.blockOffsets[id] // never panics, because db.writeBuff.contains() returned true
 
@@ -290,7 +294,10 @@ func (db *SimpleDb[T]) deleteById(id ID, keyHash hash.Type) error {
 	idList := db.keyHashItems[keyHash]
 	for i, candidateId := range idList {
 		if candidateId == id {
-			db.keyHashItems[keyHash] = append(idList[:i], idList[i+1:]...)
+			idList[i] = idList[len(idList)-1]
+			db.keyHashItems[keyHash] = idList[:len(idList)-1]
+			// idList = append(idList[:i], idList[i+1:]...)
+			// db.keyHashItems[keyHash] = idList
 			break
 		}
 	}

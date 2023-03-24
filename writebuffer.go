@@ -69,3 +69,7 @@ func (b *writeBuff) flush(file *os.File) (bo []blockOffset, err error) {
 	b.reset()
 	return
 }
+
+func (b *writeBuff) size() int64 {
+	return b.accumulated
+}
