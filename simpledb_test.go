@@ -34,7 +34,7 @@ func TestDestroy(t *testing.T) {
 	if err != nil {
 		t.Errorf("failed to create database: %v", err)
 	}
-	db.Append([]byte("Person1"), &testData[0])
+	db.Append("Person1", &testData[0])
 	db.Close()
 	err = db.Destroy()
 	if err != nil {
@@ -50,7 +50,7 @@ func TestAppendGetWithCache(t *testing.T) {
 	if err != nil {
 		t.Errorf("failed to create database: %v", err)
 	}
-	db.Append([]byte("Person1"), &testData[0])
+	db.Append("Person1", &testData[0])
 	db.Close()
 
 	// check if write cache flushed ok, item persisted
@@ -58,7 +58,7 @@ func TestAppendGetWithCache(t *testing.T) {
 	if err != nil {
 		t.Errorf("failed to reopen database: %v", err)
 	}
-	item, err := db.Get([]byte("Person1"))
+	item, err := db.Get("Person1")
 	if err != nil {
 		t.Error("failed to get item", err)
 	}
@@ -67,10 +67,10 @@ func TestAppendGetWithCache(t *testing.T) {
 	}
 
 	// add a new item
-	db.Append([]byte("Person2"), &testData[1])
+	db.Append("Person2", &testData[1])
 
 	// check if it can be retrieved straight from the cache
-	item, err = db.Get([]byte("Person2"))
+	item, err = db.Get("Person2")
 	if err != nil {
 		t.Error("failed to get item", err)
 	}
@@ -79,14 +79,14 @@ func TestAppendGetWithCache(t *testing.T) {
 	}
 
 	// check if deleted ok from write cache
-	db.Delete([]byte("Person2"))
-	_, err = db.Get([]byte("Person2"))
+	db.Delete("Person2")
+	_, err = db.Get("Person2")
 	if err == nil {
 		t.Error("should not get", err)
 	}
-	db.writeBuff.flush(db.fileHandle) // flush cache
+	db.writeBuff.flush(db.file) // flush cache
 	// check if can be read from disk or read cache
-	item, err = db.Get([]byte("Person1"))
+	item, err = db.Get("Person1")
 	if err != nil {
 		t.Error("failed to get item", err)
 	}
@@ -105,14 +105,14 @@ func TestBasicFunctionality(t *testing.T) {
 		t.Errorf("failed to create database: %v", err)
 	}
 
-	id1, err := db1.Append([]byte("Person1"), &testData[0])
+	id1, err := db1.Append("Person1", &testData[0])
 	if err != nil {
 		t.Errorf("Append fail")
 	}
 	if id1 != 0 {
 		t.Error("Bad id")
 	}
-	id2, err := db1.Append([]byte("Person2"), &testData[1])
+	id2, err := db1.Append("Person2", &testData[1])
 	if err != nil {
 		t.Errorf("Append fail")
 	}
@@ -134,12 +134,12 @@ func TestBasicFunctionality(t *testing.T) {
 		t.Error("differenc counters")
 	}
 	// test get the same item
-	_, _, err = db2.getById(id2)
+	_, _, err = db2.getItem(id2)
 	if err != nil {
 		t.Error("error getting item ", id2, err)
 	}
 	// test get the same key
-	pers, err := db2.Get([]byte("Person1"))
+	pers, err := db2.Get("Person1")
 	if err != nil {
 		t.Error("error getting by key", err)
 	}
@@ -147,11 +147,11 @@ func TestBasicFunctionality(t *testing.T) {
 		t.Error("Wrong data")
 	}
 	// this should not exist
-	_, _, err = db2.getById(9999)
+	_, _, err = db2.getItem(9999)
 	if err == nil {
 		t.Error("got non existing object")
 	}
-	_, err = db2.Get([]byte("9999"))
+	_, err = db2.Get("9999")
 	if err == nil {
 		t.Error("got non existing object")
 	}
@@ -161,14 +161,14 @@ func TestBasicFunctionality(t *testing.T) {
 		log.Infof("Cache hit rate %.2f", hr)
 		t.Error("wrong hit rate")
 	}
-	_, _, _ = db2.getById(id2)
+	_, _, _ = db2.getItem(id2)
 
 	if hr := db2.readCache.GetHitRate(); hr < 24.99 || hr > 25.01 {
 		log.Infof("Cache hit rate %f", hr)
 		t.Error("wrong hit rate")
 	}
-	_, _, _ = db1.getById(id2)
-	_, _, _ = db1.getById(id2)
+	_, _, _ = db1.getItem(id2)
+	_, _, _ = db1.getItem(id2)
 	if hr := db1.readCache.GetHitRate(); hr < 49.99 || hr > 50.01 {
 		log.Infof("Cache hit rate %f", hr)
 		t.Error("wrong hit rate")
@@ -181,27 +181,27 @@ func TestUpdate2(t *testing.T) {
 	const CacheSize = 100
 	DeleteDbFile("testUpdate2")
 	db, _ := Open[Person]("testUpdate2", CacheSize)
-	db.Append([]byte("Person1"), &testData[0])
-	db.Append([]byte("Person2"), &testData[1])
-	db.Append([]byte("Person3"), &Person{Name: "Rudolfshien", Surname: "Von Der Shuster", Age: 4})
+	db.Append("Person1", &testData[0])
+	db.Append("Person2", &testData[1])
+	db.Append("Person3", &Person{Name: "Rudolfshien", Surname: "Von Der Shuster", Age: 4})
 	db.Close()
 	// test update
 	db, _ = Open[Person]("testUpdate2", CacheSize)
-	pers, _ := db.Get([]byte("Person2"))
+	pers, _ := db.Get("Person2")
 	pers.Age = 1234
-	db.Update([]byte("Person2"), pers)
+	db.Update("Person2", pers)
 
-	db.Delete([]byte("Person1"))
+	db.Delete("Person1")
 
-	pers, _ = db.Get([]byte("Person3"))
+	pers, _ = db.Get("Person3")
 	pers.Name = "Rudolf"
 	pers.Age = 12
-	db.Update([]byte("Person3"), pers)
+	db.Update("Person3", pers)
 	db.Close()
 
 	db, _ = Open[Person]("testUpdate2", CacheSize)
 
-	val, _ := db.Get([]byte("Person3"))
+	val, _ := db.Get("Person3")
 
 	if val.Age != 12 && val.Name != "Rudolf" {
 		t.Error("Wrong value")
@@ -227,7 +227,7 @@ func TestCache(t *testing.T) {
 	for n := 0; n < numElements; n++ {
 		d = NewBenchmarkData(n)
 		//d = &benchmarkData{Value: uint(n), Str: fmt.Sprintf("Item %d", n)}
-		db.Append([]byte(fmt.Sprintf("Item%d", n)), d)
+		db.Append(fmt.Sprintf("Item%d", n), d)
 		reference[ID(n)] = d.Str
 	}
 	db.Close()
@@ -235,13 +235,13 @@ func TestCache(t *testing.T) {
 	db, _ = Open[benchmarkData]("benchmarkCache", CacheSize)
 	// fill cache
 	for n := 0; n < CacheSize; n++ {
-		db.getById(ID(n))
+		db.getItem(ID(n))
 	}
 	db.readCache.statistics.requests = 0 // artificially reset no. of requests
 	// test hits
 	for n := 0; n < numElements; n++ {
 
-		if _, d, err = db.getById(ID(n)); err != nil {
+		if _, d, err = db.getItem(ID(n)); err != nil {
 			t.Error("get failed")
 		}
 		if d.Str != reference[ID(n)] {
@@ -271,7 +271,7 @@ func TestDeleteAndUpdate(t *testing.T) {
 	// add
 	for n := 0; n < N; n++ {
 		value = NewBenchmarkData(n)
-		key := []byte(fmt.Sprintf("Item%d", n))
+		key := fmt.Sprintf("Item%d", n)
 		elements[n] = n
 		db.Append(key, value)
 	}
@@ -281,7 +281,7 @@ func TestDeleteAndUpdate(t *testing.T) {
 	db, _ = Open[benchmarkData]("delLogic", CacheSize)
 	for n := N / 2; n < N; n++ {
 		x := rand.Intn(N)
-		key := []byte(fmt.Sprintf("Item%d", x))
+		key := fmt.Sprintf("Item%d", x)
 		value, err := db.Get(key)
 		if err != nil {
 			t.Error("should be able to get")
@@ -301,7 +301,7 @@ func TestDeleteAndUpdate(t *testing.T) {
 	for n := 0; n < N; n++ {
 		which := rand.Intn(len(elements))
 		elNo := elements[which]
-		key := []byte(fmt.Sprintf("Item%d", elNo))
+		key := fmt.Sprintf("Item%d", elNo)
 		err = db.Delete(key)
 		if err != nil {
 			t.Errorf("el:%d, key:%s", elNo, string(key))
@@ -312,7 +312,7 @@ func TestDeleteAndUpdate(t *testing.T) {
 		elements = elements[:len(elements)-1]
 	}
 
-	err = db.Delete([]byte("Item0"))
+	err = db.Delete("Item0")
 	if err == nil {
 		t.Error("should not be able to delete")
 	}

@@ -12,7 +12,7 @@ import (
 type checkData struct {
 	id     ID
 	key    string
-	offset uint64
+	offset int64
 }
 
 // Test buffer in real-life scenario
@@ -20,15 +20,15 @@ func TestBuff(t *testing.T) {
 	const filename = "db\\testbuff.sdb"
 	var (
 		header      blockHeader
-		curpos      uint64
+		curpos      int64
 		count       int
 		err         error
-		offset      uint64
+		offset      int64
 		globalCheck []checkData = []checkData{}
-		accumulated int
+		accumulated int64
 		flushes     int
-		chkBo       []idOffset = []idOffset{}
-		curOffset   uint64
+		chkBo       []blockOffset = []blockOffset{}
+		curOffset   int64
 	)
 
 	// testing parameters
@@ -53,12 +53,12 @@ func TestBuff(t *testing.T) {
 		// generate dummy data
 		id := ID(i)
 		data := make([]byte, rndSize+rand.Intn(rndSize))
-		key := []byte(fmt.Sprintf("Item %04d", id))
+		key := fmt.Sprintf("Item %04d", id)
 
 		// create block
 		block := NewBlock(id, key, data)
 		blockBytes := block.getBytes()
-		noBytes := len(blockBytes)
+		noBytes := int64(len(blockBytes))
 
 		// append to the write buffer
 		wb.append(id, blockBytes)
@@ -71,14 +71,14 @@ func TestBuff(t *testing.T) {
 				offset: offset,
 			})
 		chkBo = append(chkBo,
-			idOffset{
+			blockOffset{
 				id,
 				curOffset,
 			})
 
 		// do maths
-		curOffset += uint64(noBytes)
-		offset += uint64(noBytes)
+		curOffset += int64(noBytes)
+		offset += int64(noBytes)
 		accumulated += noBytes
 
 		// write buffered data when flushLimit exceeded
@@ -102,7 +102,7 @@ func TestBuff(t *testing.T) {
 			// reset values for the next buffer
 			curOffset = 0
 			accumulated = 0
-			chkBo = []idOffset{}
+			chkBo = []blockOffset{}
 			wb.reset()
 		}
 	}
@@ -114,7 +114,7 @@ func TestBuff(t *testing.T) {
 
 	// read file to mem
 	file, _ = openFile(filename)
-	blockOffsets := make(BlockOffsets)
+	blockOffsets := make(map[ID]int64)
 loop:
 	for {
 		// read block headers
@@ -131,7 +131,7 @@ loop:
 		}
 		// buiild offsets
 		blockOffsets[ID(header.Id)] = curpos
-		curpos += uint64(header.Length)
+		curpos += int64(header.Length)
 
 		count++
 	}

@@ -14,7 +14,7 @@ func TestCacheFunctions(t *testing.T) {
 
 	for n := 0; n < N; n++ {
 		d := NewBenchmarkData(n)
-		cache.add(&Item[benchmarkData]{ID: ID(n), Value: d})
+		cache.add(&cacheItem[benchmarkData]{id: ID(n), value: d})
 		reference[ID(n)] = d.Str
 	}
 
@@ -23,8 +23,8 @@ func TestCacheFunctions(t *testing.T) {
 	}
 
 	for n := 0; n < len(reference); n++ {
-		d, ok := cache.checkAndGet(ID(n))
-		if !ok || reference[ID(n)] != d.Value.Str {
+		d, ok := cache.getIfExists(ID(n))
+		if !ok || reference[ID(n)] != d.value.Str {
 			t.Error("Data mismatch")
 		}
 	}
@@ -35,8 +35,8 @@ func TestCacheFunctions(t *testing.T) {
 	}
 
 	for id, str := range reference {
-		cacheItem, ok := cache.checkAndGet(ID(id))
-		if !ok || str != cacheItem.Value.Str {
+		cacheItem, ok := cache.getIfExists(ID(id))
+		if !ok || str != cacheItem.value.Str {
 			t.Error("Data mismatch")
 		}
 	}
@@ -52,12 +52,12 @@ func TestCacheHitRate(t *testing.T) {
 
 	for n := 0; n < N; n++ {
 		d := NewBenchmarkData(n)
-		cache.add(&Item[benchmarkData]{ID: ID(n), Value: d})
+		cache.add(&cacheItem[benchmarkData]{id: ID(n), value: d})
 		reference[ID(n)] = d.Str
 	}
 
 	for n := 0; n < N/2; n++ {
-		cache.checkAndGet(ID(rand.Intn(N)))
+		cache.getIfExists(ID(rand.Intn(N)))
 	}
 	hr := cache.GetHitRate()
 	if hr < expectedHitrate-5 || hr > expectedHitrate+5 {
@@ -79,7 +79,7 @@ func BenchmarkCacheAdd(b *testing.B) {
 	b.StartTimer()
 	for n := 0; n < b.N; n++ {
 		d = NewBenchmarkData(n)
-		cache.add(&Item[benchmarkData]{ID: ID(n), Value: d})
+		cache.add(&cacheItem[benchmarkData]{id: ID(n), value: d})
 		reference[ID(n)] = d.Str
 	}
 }
@@ -97,7 +97,7 @@ func BenchmarkCacheChkAndGet(b *testing.B) {
 	reference := make(map[ID]string)
 	for n := 0; n < b.N; n++ {
 		d = NewBenchmarkData(n)
-		cache.add(&Item[benchmarkData]{ID: ID(n), Value: d})
+		cache.add(&cacheItem[benchmarkData]{id: ID(n), value: d})
 		reference[ID(n)] = d.Str
 	}
 
@@ -105,7 +105,7 @@ func BenchmarkCacheChkAndGet(b *testing.B) {
 
 	for n := 0; n < b.N; n++ {
 		rndNo := ID(rand.Intn(int(numElements)))
-		cache.checkAndGet(rndNo)
+		cache.getIfExists(rndNo)
 	}
 }
 
@@ -122,7 +122,7 @@ func BenchmarkCacheTouch(b *testing.B) {
 	reference := make(map[ID]string)
 	for n := 0; n < b.N; n++ {
 		d = NewBenchmarkData(n)
-		cache.add(&Item[benchmarkData]{ID: ID(n), Value: d})
+		cache.add(&cacheItem[benchmarkData]{id: ID(n), value: d})
 		reference[ID(n)] = d.Str
 	}
 	b.StartTimer()
@@ -144,7 +144,7 @@ func BenchmarkCacheRemove(b *testing.B) {
 	reference := []int{}
 	for n := 0; n < b.N; n++ {
 		d = NewBenchmarkData(n)
-		cache.add(&Item[benchmarkData]{ID: ID(n), Value: d})
+		cache.add(&cacheItem[benchmarkData]{id: ID(n), value: d})
 		reference = append(reference, n)
 	}
 	b.StartTimer()

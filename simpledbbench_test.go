@@ -32,7 +32,7 @@ func BenchmarkPerfWithCache(b *testing.B) {
 	reference := make(map[ID]string)
 	for n := 0; n < b.N; n++ {
 		d = NewBenchmarkData(n)
-		db.Append([]byte(fmt.Sprintf("Item%d", n)), d)
+		db.Append(fmt.Sprintf("Item%d", n), d)
 		reference[ID(n)] = d.Str
 	}
 	// db.Close()
@@ -40,7 +40,7 @@ func BenchmarkPerfWithCache(b *testing.B) {
 	// db, _ = Open[benchmarkData]("benchmark", CacheSize)
 	for n := 0; n < b.N; n++ {
 		rndNo := ID(rand.Intn(int(numElements)))
-		if _, _, err = db.getById(rndNo); err != nil {
+		if _, _, err = db.getItem(rndNo); err != nil {
 			b.Error("get failed")
 		}
 	}
@@ -53,7 +53,7 @@ func BenchmarkDeleteAndUpdate(b *testing.B) {
 		value *benchmarkData
 		err   error
 	)
-
+	//var N = 600
 	var N = 1 + b.N
 	var CacheSize = 1 + uint32(N/2)
 	log.Info("N=", N)
@@ -68,9 +68,10 @@ func BenchmarkDeleteAndUpdate(b *testing.B) {
 
 	for n := 0; n < N; n++ {
 		value = &benchmarkData{Str: fmt.Sprintf("value%d ", n)}
-		key := []byte(fmt.Sprintf("Item%d", n))
+		key := fmt.Sprintf("Item%d", n)
 		elements[n] = n
 		db.Append(key, value)
+
 	}
 	db.Close()
 
@@ -78,16 +79,22 @@ func BenchmarkDeleteAndUpdate(b *testing.B) {
 	db, _ = Open[benchmarkData]("delLogic", CacheSize)
 	for n := 0; n < N/2; n++ {
 		x := rand.Intn(N)
-		key := []byte(fmt.Sprintf("Item%d", x))
+		key := fmt.Sprintf("Item%d", x)
 
 		value, err := db.Get(key)
 		if err != nil {
-			b.Error("should be able to get :", string(key))
+			db.Get(key)
+			b.Error("n=", n, "should be able to get :", string(key))
+			return
 		}
-		// log.Info(x, ":", string(key), ":", val.Str)
+		// log.Info(x, ":", string(key), ":", value.Str)
 		value.Value = 0
 		value.Str += " mod"
-		db.Update(key, value)
+		_, err = db.Update(key, value)
+		if err != nil {
+			b.Error("fail")
+		}
+		// fmt.Print(x, "->", id, "\t")
 	}
 	db.Close()
 
@@ -96,7 +103,7 @@ func BenchmarkDeleteAndUpdate(b *testing.B) {
 	for n := 0; n < N; n++ {
 		which := rand.Intn(len(elements))
 		elNo := elements[which]
-		key := []byte(fmt.Sprintf("Item%d", elNo))
+		key := fmt.Sprintf("Item%d", elNo)
 		err = db.Delete(key)
 		if err != nil {
 			b.Errorf("el:%d, key:%s", elNo, string(key))

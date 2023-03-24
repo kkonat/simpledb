@@ -6,7 +6,7 @@ import (
 
 func TestBlock(t *testing.T) {
 	block1 := NewBlock(0,
-		[]byte("KeyKey"),
+		"KeyKey",
 		[]byte("ValueValue"),
 	)
 

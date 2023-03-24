@@ -7,21 +7,21 @@ import (
 	"github.com/kkonat/simpledb/hash"
 )
 
-type Item[T any] struct {
-	ID      ID
-	KeyHash hash.Type
-	Key     Key
-	Value   *T
+type cacheItem[T any] struct {
+	id      ID
+	keyHash hash.Type
+	key     string
+	value   *T
 }
 
-type Stats struct {
+type stats struct {
 	requests uint64
 	hits     uint64
 }
 type cache[T any] struct {
 	queue      *list.List
 	queueIndx  map[ID]*list.Element
-	statistics Stats
+	statistics stats
 	maxSize    uint32
 }
 
@@ -36,43 +36,34 @@ func (c *cache[T]) init(CacheSize uint32) {
 	c.maxSize = CacheSize
 	c.queueIndx = make(map[ID]*list.Element)
 	c.queue = list.New()
-	c.statistics = Stats{}
-}
-
-// cleans up the cache
-func (c *cache[T]) cleanup() {
-	// mark unused for GC
-	for _, i := range c.queueIndx {
-		i.Value = nil
-	}
-	c.queue.Init()
+	c.statistics = stats{}
 }
 
 // adds new item to the cache and drops the oldest one
-func (c *cache[T]) add(item *Item[T]) {
+func (c *cache[T]) add(item *cacheItem[T]) {
 
 	if uint32(c.queue.Len()) == c.maxSize {
 		first := c.queue.Front()
-		firstId := first.Value.(*Item[T]).ID
+		firstId := first.Value.(*cacheItem[T]).id
 		delete(c.queueIndx, firstId) // delete reference first
 		c.queue.Remove(first)        // delete actual item
 	}
 	c.queue.PushBack(item)
-	c.queueIndx[item.ID] = c.queue.Back()
+	c.queueIndx[item.id] = c.queue.Back()
 }
 
 // checks if the item is in the cache and if so, returns its value
-func (c *cache[T]) checkAndGet(id ID) (*Item[T], bool) {
+func (c *cache[T]) getIfExists(id ID) (*cacheItem[T], bool) {
 	c.statistics.requests++
 	if item, ok := c.queueIndx[id]; ok {
 		c.statistics.hits++
-		return item.Value.(*Item[T]), true
+		return item.Value.(*cacheItem[T]), true
 	}
 	return nil, false
 }
-func (c *cache[T]) check(id ID) (exists bool) {
-	_, exists = c.queueIndx[id]
-	return
+func (c *cache[T]) contains(id ID) bool {
+	_, contains := c.queueIndx[id]
+	return contains
 }
 
 // moves an element in the queue to its end to mars it as the one used most recently
