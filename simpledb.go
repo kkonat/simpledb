@@ -33,7 +33,6 @@ type SimpleDb[T any] struct {
 	mtx sync.RWMutex
 
 	readCache *cache[T]
-	writeBuff *writeBuff
 
 	ItemsCount    int   // number of items in the db
 	currentOffset int64 // as blocks may be up to  4GB long, the file length/index must be at least uint64
@@ -68,15 +67,12 @@ func Open[T any](filename string, cacheSize uint32) (db *SimpleDb[T], err error)
 			return nil, &DbGeneralError{err: "open"}
 		}
 
-		db.writeBuff = newWriteBuff()
-
 		if err = db.loadDb(); err != nil {
 			return nil, &DbInternalError{oper: "reading db", err: err}
 		}
 	} else { // if not, initialize empty db
 		db.blockOffsets = make(map[ID]int64)
 		db.file, err = openFile(db.filePath)
-		db.writeBuff = newWriteBuff()
 	}
 	return
 }
@@ -127,36 +123,20 @@ func (db *SimpleDb[T]) appendItem(key string, value *T) (id ID, err error) {
 	}
 	block := NewBlock(id, key, srlzdValue)
 
-	// w, err := db.file.Write(block.getBytes())
-	// if err != nil {
-	// 	return 0, err
-	// }
-
-	// db.blockOffsets[id] = db.currentOffset
-	// db.currentOffset += int64(w)
-	// db.ItemsCount++
-
-	db.writeBuff.append(id, block.getBytes())
-	if db.writeBuff.size() > bulkWriteSize {
-		if bo, err := db.writeBuff.flush(db.file); err != nil {
-			return 0, &DbInternalError{oper: "flushing cache"}
-		} else {
-			db.updateBlockOffsets(bo)
-		}
+	w, err := db.file.Write(block.getBytes())
+	if err != nil {
+		return 0, err
 	}
+
+	db.blockOffsets[id] = db.currentOffset
+	db.currentOffset += int64(w)
+	db.ItemsCount++
+
 	if db.keyHashItems[keyHash] == nil {
 		db.keyHashItems[keyHash] = make([]ID, 16)
 	}
 	db.keyHashItems[keyHash] = append(db.keyHashItems[keyHash], id)
 	return id, nil
-}
-
-func (db *SimpleDb[T]) updateBlockOffsets(bo []blockOffset) {
-	for i := 0; i < len(bo); i++ {
-		db.blockOffsets[bo[i].id] = db.currentOffset // add to offsets map
-		db.currentOffset += bo[i].offset
-		db.ItemsCount++ // update db capacity
-	}
 }
 
 // Gets one key, value pair from the database for the given Id
@@ -173,19 +153,11 @@ func (db *SimpleDb[T]) getItem(id ID) (key string, value *T, err error) {
 		return object.key, object.value, nil
 	}
 
-	if db.writeBuff.contains(id) { // it may be  still in the write buffer which has not been flushed yet
-		bo, err := db.writeBuff.flush(db.file)
-		if err != nil {
-			return "", nil, err
-		}
-		db.updateBlockOffsets(bo)
-	}
-
 	if !db.contains(id) { // re-check if it is now in the file
 		return "", nil, &NotFoundError{id: id}
 	}
 	// if it is, read it from the  file
-	offset := db.blockOffsets[id] // never panics, because db.writeBuff.contains() returned true
+	offset := db.blockOffsets[id]
 
 	// read item from the file
 	db.file.Seek(int64(offset), io.SeekStart) // seek to the item  position in the file
@@ -275,12 +247,8 @@ func (db *SimpleDb[T]) deleteById(id ID, keyHash hash.Type) error {
 	if db.readCache.contains(id) {
 		db.readCache.remove(id)
 	}
-	if db.writeBuff.contains(id) {
-		db.writeBuff.remove(id)
-	}
 
 	if !db.contains(id) { // should be in the file then
-		db.writeBuff.contains(id)
 		return &NotFoundError{id: id}
 	}
 
@@ -336,10 +304,6 @@ func (db *SimpleDb[T]) Close() (err error) {
 	var bytesWritten int64
 
 	var tmpFile = filepath.Join(DbPath, "temp.sdb")
-
-	if _, err := db.writeBuff.flush(db.file); err != nil { // flush write buffer
-		return &DbInternalError{oper: "flushing cche"}
-	}
 
 	if err = db.file.Close(); err != nil {
 		return &DbInternalError{oper: "closing: %w", err: err}
