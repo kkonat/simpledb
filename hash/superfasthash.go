@@ -33,12 +33,13 @@
 package hash
 
 func get16bits(data []byte, index int) (bits uint32) {
-	return uint32(data[index+1])<<8 + uint32(data[index])
+	v := uint32(data[index+1])<<8 + uint32(data[index])
+	return v
 }
 
 func calcSuperfasthash(data []byte) Type {
 
-	if data == nil || len(data) == 0 {
+	if len(data) == 0 {
 		return 0
 	}
 
@@ -60,12 +61,10 @@ func calcSuperfasthash(data []byte) Type {
 		hash = hash ^ (hash << 16)
 		hash = hash ^ (uint32(data[index+2]))<<18
 		hash = hash + (hash >> 11)
-		break
 	case 2:
 		hash = hash + get16bits(data, index)
 		hash = hash ^ (hash << 11)
 		hash = hash + (hash >> 17)
-		break
 	case 1:
 		hash = hash + uint32(data[index])
 		hash = hash ^ (hash << 10)
@@ -80,3 +79,5 @@ func calcSuperfasthash(data []byte) Type {
 
 	return Type(hash)
 }
+
+// https://gist.github.com/swgiacomelli/862de5d20fa843055a433f62e29abe02

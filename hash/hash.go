@@ -12,13 +12,14 @@ var hashFunc func(data []byte) Type
 func init() {
 	crc32table = crc32.MakeTable(0x82f63b78)
 	hashFunc = calcCrc32
+	//hashFunc = calcSuperfasthash // TODO: fails test, debug why
 }
 
 func SetFunc(f func(data []byte) Type) {
 	hashFunc = f
 }
-func Get(data []byte) Type {
-	return hashFunc(data)
+func Get(data string) Type {
+	return hashFunc([]byte(data))
 }
 
 func calcCrc32(data []byte) Type {

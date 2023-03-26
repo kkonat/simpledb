@@ -22,19 +22,6 @@ func openFile(path string) (file *os.File, err error) {
 	return
 }
 
-// compares two keys provided as []byte slices
-func keysEqual(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i, v := range a {
-		if v != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
 // prints out the []byte slice content
 func printBytes(bytes []byte) {
 	for _, b := range bytes {

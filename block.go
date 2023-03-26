@@ -32,11 +32,11 @@ func (b *blockHeader) getBytes() (header []byte) {
 
 type block struct {
 	blockHeader
-	key   []byte
+	key   string
 	value []byte
 }
 
-func NewBlock(id ID, key []byte, value []byte) *block {
+func NewBlock(id ID, key string, value []byte) *block {
 	var header blockHeader
 	headerLen := blockheadersSize()
 	blockLen := headerLen + len(key) + len(value)
@@ -51,9 +51,6 @@ func NewBlock(id ID, key []byte, value []byte) *block {
 	return block
 }
 
-func (b *block) write(file *os.File) (bytesWritten int, err error) {
-	return file.Write(b.getBytes())
-}
 func (b *block) getBytes() []byte {
 	headerBytes := b.blockHeader.getBytes()
 	blockBytes := append(headerBytes, b.key...)
@@ -67,6 +64,6 @@ func (b *block) setBytes(blockBytes []byte) {
 	binary.Read(buff, binary.LittleEndian, &(b.blockHeader))
 	keyStart := int(unsafe.Sizeof(blockHeader{}))
 	valueStart := keyStart + int(b.blockHeader.KeyLen)
-	b.key = blockBytes[keyStart:valueStart]
+	b.key = string(blockBytes[keyStart:valueStart])
 	b.value = blockBytes[valueStart:]
 }
